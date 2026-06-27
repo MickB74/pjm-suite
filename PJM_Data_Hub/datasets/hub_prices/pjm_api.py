@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""PJM DOM Hub LMP downloader — core engine.
+"""PJM hub LMP downloader — core engine (via gridstatus).
 
-Pulls hourly Real-Time LMPs for PJM trading hubs from the PJM Data Miner 2
-API (api.pjm.com, endpoint ``rt_hrl_lmps``). Keeps a local parquet store and
-updates it incrementally.
+Pulls hourly Real-Time LMPs for the PJM trading hubs from PJM Data Miner 2
+through the ``gridstatus`` library, which handles authentication, pagination,
+the PJM date-range format, DST, and the canonical hub pnode names. Keeps a
+local parquet store and updates it incrementally.
 
     data/hub_prices/pjm_hub_prices_hourly.parquet
     data/hub_prices/pjm_hub_prices_hourly.csv
+
+Requires a free PJM Data Miner 2 subscription key (config.json: subscription_key,
+or the PJM_API_KEY environment variable). Register at https://api.pjm.com/ —
+non-members get free API access for internal business use; see README.
 
 Usage:
     python pjm_api.py set-credentials
     python pjm_api.py test-auth
     python pjm_api.py update
     python pjm_api.py status
-
-API registration: https://api.pjm.com/
 """
 
 from __future__ import annotations
@@ -29,7 +32,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -40,28 +42,16 @@ from pjm_core.settlement_points import HUBS, PRIMARY_HUB
 # Constants
 # ---------------------------------------------------------------------------
 
-API_BASE = "https://api.pjm.com/api/v1"
-RT_LMP_ENDPOINT = f"{API_BASE}/rt_hrl_lmps"
-DA_LMP_ENDPOINT = f"{API_BASE}/da_hrl_lmps"
+# gridstatus market identifier for PJM real-time hourly LMPs.
+RT_MARKET = "REAL_TIME_HOURLY"
+DA_MARKET = "DAY_AHEAD_HOURLY"
 
-# PJM's free Data Miner API is paginated at max 50,000 rows per request.
-PAGE_SIZE = 50_000
-HTTP_TIMEOUT = 60
-MAX_RETRIES = 4
-MIN_REQUEST_INTERVAL = 1.0   # seconds between requests
-MAX_RATE_LIMIT_WAITS = 10
-OVERLAP_DAYS = 3
+OVERLAP_DAYS = 3        # re-fetch recent days to pick up late revisions
 STALE_AFTER_DAYS = 7
-DATE_CHUNK_DAYS = 30
+DATE_CHUNK_DAYS = 30    # fetch in chunks (PJM caps a single query at 366 days)
 
-# Default backfill start (beginning of last year) — can be overridden in config.
 _EASTERN = ZoneInfo("America/New_York")
-
-DEFAULT_BACKFILL_START = date(
-    datetime.now(tz=_EASTERN).year - 1, 1, 1
-).isoformat()
-
-_last_request_time = 0.0
+DEFAULT_BACKFILL_START = date(datetime.now(tz=_EASTERN).year - 1, 1, 1).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -81,195 +71,113 @@ def _make_logger(callback=None):
 
 
 # ---------------------------------------------------------------------------
-# Authentication (PJM only needs a subscription key in a header)
+# Auth / client
 # ---------------------------------------------------------------------------
 
 class PJMAuthError(RuntimeError):
     pass
 
 
-def _headers(cfg: dict) -> dict:
-    key = cfg.get("subscription_key", "")
+def _api_key(cfg: dict | None = None) -> str:
+    cfg = cfg if cfg is not None else credentials.load_config()
+    key = cfg.get("subscription_key") or os.environ.get("PJM_API_KEY", "")
     if not key:
         raise PJMAuthError(
-            "Missing PJM API subscription key. Run 'set-credentials' or set it in config.json."
+            "Missing PJM API subscription key. Run 'set-credentials' or set it "
+            "in config.json / the PJM_API_KEY environment variable."
         )
-    return {"Ocp-Apim-Subscription-Key": key}
+    return key
 
 
-def test_auth(cfg: dict, log=print) -> bool:
-    """Verify the subscription key works by fetching one row."""
+def _client(cfg: dict | None = None):
+    """Return an authenticated gridstatus PJM client."""
     try:
-        yesterday = (date.today() - timedelta(days=2)).isoformat()
-        params = {
-            "datetime_beginning_ept": f"{yesterday} 00:00",
-            "pnode_name": PRIMARY_HUB,
-            "rowCount": 1,
-            "startRow": 1,
-        }
-        r = requests.get(RT_LMP_ENDPOINT, headers=_headers(cfg), params=params,
-                         timeout=HTTP_TIMEOUT)
-        r.raise_for_status()
-        log("Auth OK.")
-        return True
+        from gridstatus import PJM
+    except ImportError as e:
+        raise ImportError("gridstatus not installed. Run: pip install gridstatus") from e
+    return PJM(api_key=_api_key(cfg))
+
+
+def test_auth(cfg: dict | None = None, log=print) -> bool:
+    """Verify the key works by fetching one recent hour of hub LMPs."""
+    try:
+        iso = _client(cfg)
+        d = pd.Timestamp(date.today() - timedelta(days=2))
+        df = iso.get_lmp(date=d, end=d + pd.Timedelta(hours=2),
+                         market=RT_MARKET, locations="hubs")
+        ok = df is not None and not df.empty
+        log("Auth OK." if ok else "Auth returned no data (key may lack access).")
+        return ok
     except Exception as e:
         log(f"Auth failed: {e}")
         return False
 
 
 # ---------------------------------------------------------------------------
-# HTTP helpers
+# Fetch + normalise
 # ---------------------------------------------------------------------------
 
-def _throttle():
-    global _last_request_time
-    wait = MIN_REQUEST_INTERVAL - (time.time() - _last_request_time)
-    if wait > 0:
-        time.sleep(wait)
-    _last_request_time = time.time()
-
-
-def _do_request(url: str, headers: dict, params: dict, log=print) -> dict:
-    """GET with retry on 429 / 5xx. Returns parsed JSON."""
-    rate_waits = 0
-    attempt = 0
-    while True:
-        _throttle()
-        try:
-            r = requests.get(url, headers=headers, params=params, timeout=HTTP_TIMEOUT)
-        except requests.RequestException as e:
-            attempt += 1
-            if attempt > MAX_RETRIES:
-                raise RuntimeError(f"PJM API request failed after {MAX_RETRIES} tries: {e}")
-            time.sleep(2 * attempt)
-            continue
-
-        if r.status_code == 200:
-            return r.json()
-
-        if r.status_code == 429:
-            rate_waits += 1
-            if rate_waits > MAX_RATE_LIMIT_WAITS:
-                raise RuntimeError("Still rate-limited after many waits.")
-            wait_secs = float(r.headers.get("Retry-After", 30)) + 1.0
-            log(f"    rate-limited; waiting {wait_secs:.0f}s …")
-            time.sleep(wait_secs)
-            continue
-
-        if r.status_code in (500, 502, 503, 504):
-            attempt += 1
-            if attempt > MAX_RETRIES:
-                raise RuntimeError(f"PJM API HTTP {r.status_code}: {r.text[:200]}")
-            time.sleep(3 * attempt)
-            continue
-
-        raise RuntimeError(f"PJM API HTTP {r.status_code}: {r.text[:200]}")
-
-
-# ---------------------------------------------------------------------------
-# Data fetching
-# ---------------------------------------------------------------------------
-
-def _fetch_lmps_page(
-    headers: dict,
-    hub: str,
-    start_dt: datetime,
-    end_dt: datetime,
-    start_row: int,
-    log=print,
-    endpoint: str = RT_LMP_ENDPOINT,
-) -> dict:
-    params = {
-        "datetime_beginning_ept": start_dt.strftime("%Y-%m-%d %H:%M"),
-        "datetime_ending_ept": end_dt.strftime("%Y-%m-%d %H:%M"),
-        "pnode_name": hub,
-        "rowCount": PAGE_SIZE,
-        "startRow": start_row,
-        "fields": "datetime_beginning_ept,datetime_ending_ept,pnode_id,pnode_name,voltage,equipment,type,system_energy_price_rt,total_lmp_rt,congestion_price_rt,marginal_loss_price_rt",
-    }
-    return _do_request(endpoint, headers, params, log=log)
-
-
-def fetch_hub_lmps(
-    cfg: dict,
-    hub: str,
-    start: date,
-    end: date,
-    log=print,
-    endpoint: str = RT_LMP_ENDPOINT,
-) -> pd.DataFrame:
-    """Fetch all hourly RT LMP rows for one hub over [start, end] inclusive."""
-    hdrs = _headers(cfg)
-    frames = []
-    chunk_start = start
-    while chunk_start <= end:
-        chunk_end = min(chunk_start + timedelta(days=DATE_CHUNK_DAYS - 1), end)
-        s_dt = datetime(chunk_start.year, chunk_start.month, chunk_start.day, 0, 0)
-        # end: first hour of the day AFTER chunk_end (exclusive)
-        e_dt = datetime(chunk_end.year, chunk_end.month, chunk_end.day, 0, 0) + timedelta(days=1)
-
-        start_row = 1
-        while True:
-            payload = _fetch_lmps_page(hdrs, hub, s_dt, e_dt, start_row, log=log, endpoint=endpoint)
-            items = payload.get("items", [])
-            total = payload.get("totalRows", 0)
-            if items:
-                frames.append(pd.DataFrame(items))
-            fetched_so_far = start_row - 1 + len(items)
-            if fetched_so_far >= total or not items:
-                break
-            start_row += PAGE_SIZE
-
-        chunk_start = chunk_end + timedelta(days=1)
-
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
-
-
-# ---------------------------------------------------------------------------
-# Normalisation
-# ---------------------------------------------------------------------------
-
-_RENAME_RT = {
-    "datetime_beginning_ept": "datetime_beginning_ept",
-    "datetime_ending_ept": "datetime_ending_ept",
-    "pnode_id": "pnode_id",
-    "pnode_name": "pnode_name",
-    "voltage": "voltage",
-    "equipment": "equipment",
-    "type": "type",
-    "system_energy_price_rt": "energy",
-    "total_lmp_rt": "total_lmp",
-    "congestion_price_rt": "congestion",
-    "marginal_loss_price_rt": "loss",
+# gridstatus LMP columns -> our store schema.
+_GS_RENAME = {
+    "Location": "pnode_name",
+    "Location Type": "type",
+    "LMP": "total_lmp",
+    "Energy": "energy",
+    "Congestion": "congestion",
+    "Loss": "loss",
 }
 
 
-def normalize(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    df = df.rename(columns=_RENAME_RT).copy()
+def _normalize_gs(df: pd.DataFrame) -> pd.DataFrame:
+    """Map a gridstatus PJM LMP frame to the local store schema (naive Eastern)."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.rename(columns=_GS_RENAME).copy()
+
+    # gridstatus returns tz-aware Eastern Interval Start/End; store naive Eastern.
+    df["datetime_beginning_ept"] = tz.to_naive_eastern(pd.to_datetime(df["Interval Start"]))
+    df["datetime_ending_ept"] = tz.to_naive_eastern(pd.to_datetime(df["Interval End"]))
 
     for col in ("total_lmp", "energy", "congestion", "loss"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["datetime_beginning_ept"] = pd.to_datetime(df["datetime_beginning_ept"], errors="coerce")
-    df["datetime_ending_ept"] = pd.to_datetime(df.get("datetime_ending_ept", pd.NaT), errors="coerce")
-
-    # Store as naive Eastern wall-clock (lake convention — matches ERCOT approach)
-    df["datetime_beginning_ept"] = tz.to_naive_eastern(df["datetime_beginning_ept"])
-    df["datetime_ending_ept"] = tz.to_naive_eastern(df["datetime_ending_ept"])
-
     keep = [c for c in [
         "datetime_beginning_ept", "datetime_ending_ept",
-        "pnode_name", "pnode_id", "type", "voltage", "equipment",
+        "pnode_name", "type",
         "total_lmp", "energy", "congestion", "loss",
     ] if c in df.columns]
+    return df[keep].dropna(subset=["datetime_beginning_ept", "pnode_name"])
 
-    df = df[keep].dropna(subset=["datetime_beginning_ept", "pnode_name"])
-    return df
+
+def fetch_hub_lmps(cfg: dict, start: date, end: date, log=print,
+                   market: str = RT_MARKET) -> pd.DataFrame:
+    """Fetch hourly hub LMPs for [start, end] inclusive (all PJM hubs)."""
+    iso = _client(cfg)
+    frames = []
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + timedelta(days=DATE_CHUNK_DAYS - 1), end)
+        log(f"    {chunk_start} → {chunk_end} …")
+        try:
+            df = iso.get_lmp(
+                date=pd.Timestamp(chunk_start),
+                end=pd.Timestamp(chunk_end) + pd.Timedelta(days=1),
+                market=market,
+                locations="hubs",
+            )
+            norm = _normalize_gs(df)
+            if not norm.empty:
+                frames.append(norm)
+                log(f"      {len(norm):,} rows")
+        except Exception as e:
+            log(f"      chunk failed: {e}")
+        chunk_start = chunk_end + timedelta(days=1)
+        time.sleep(0.5)  # be polite to the API
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +217,7 @@ def write_state(state: dict) -> None:
 
 
 def days_since_update() -> float | None:
-    state = read_state()
-    ts = state.get("last_success")
+    ts = read_state().get("last_success")
     if not ts:
         return None
     try:
@@ -350,44 +257,37 @@ def store_summary() -> dict:
 # ---------------------------------------------------------------------------
 
 def update(hubs: list[str] | None = None, progress_callback=None) -> dict:
-    """Fetch new data and merge into the local store."""
+    """Fetch new hub LMPs and merge into the local store.
+
+    ``hubs`` filters which hub pnode names are kept (default: all PJM hubs).
+    gridstatus always returns every hub in one call, so this is a post-filter.
+    """
     log = _make_logger(progress_callback)
     cfg = credentials.load_config()
-    if not credentials.have_credentials(cfg):
-        raise PJMAuthError("Missing PJM subscription key. Run 'set-credentials'.")
+    _api_key(cfg)  # raises early if missing
 
-    hubs = hubs or [PRIMARY_HUB]  # default to DOM HUB only
     existing = load_store()
-
-    cfg_start = cfg.get("backfill_start", DEFAULT_BACKFILL_START)
-    start = date.fromisoformat(cfg_start)
+    start = date.fromisoformat(cfg.get("backfill_start", DEFAULT_BACKFILL_START))
     end = tz.now_eastern().date()
     if start > end:
         start = end
 
-    if existing.empty:
-        log(f"No local data. Backfilling from {start} for: {', '.join(hubs)}")
-    else:
-        have_min = existing["datetime_beginning_ept"].min()
-        have_max = existing["datetime_beginning_ept"].max()
-        log(f"Existing data {have_min} → {have_max}. Updating through {end}.")
-
-    # Overlap window to pick up late revisions
-    fetch_start = max(start, (end - timedelta(days=OVERLAP_DAYS + 1)))
+    # On an existing store, only refresh the recent overlap window.
     if existing.empty:
         fetch_start = start
+        log(f"No local data. Backfilling hubs from {start} → {end}.")
+    else:
+        have_max = pd.to_datetime(existing["datetime_beginning_ept"]).max().date()
+        fetch_start = max(start, have_max - timedelta(days=OVERLAP_DAYS))
+        log(f"Existing data through {have_max}. Fetching {fetch_start} → {end}.")
 
-    combined = existing
-    for i, hub in enumerate(hubs, 1):
-        log(f"[{i}/{len(hubs)}] {hub} ({fetch_start} → {end}) …")
-        raw = fetch_hub_lmps(cfg, hub, fetch_start, end, log=log)
-        norm = normalize(raw)
-        log(f"    got {len(norm):,} rows.")
-        if not norm.empty:
-            combined = pd.concat([combined, norm], ignore_index=True)
+    fetched = fetch_hub_lmps(cfg, fetch_start, end, log=log)
+    if hubs and not fetched.empty:
+        fetched = fetched[fetched["pnode_name"].isin(hubs)]
 
+    combined = pd.concat([existing, fetched], ignore_index=True) if not fetched.empty else existing
     if combined.empty:
-        raise RuntimeError("No data available.")
+        raise RuntimeError("No data available — nothing fetched and no existing store.")
 
     before = len(combined)
     combined = combined.drop_duplicates(subset=_dedup_keys(combined), keep="last")
@@ -411,7 +311,7 @@ def update(hubs: list[str] | None = None, progress_callback=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="PJM hub hourly LMP downloader.")
+    parser = argparse.ArgumentParser(description="PJM hub hourly LMP downloader (gridstatus).")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("set-credentials", help="Enter/save your PJM subscription key.")
     sub.add_parser("test-auth", help="Verify the key works.")
@@ -419,7 +319,7 @@ def main(argv=None):
     up.add_argument("--auto", action="store_true",
                     help="Quiet mode for scheduled jobs; skips if data is fresh.")
     up.add_argument("--hubs", nargs="*", default=None,
-                    help="Hub names to fetch (default: DOM HUB).")
+                    help="Hub names to keep (default: all PJM hubs).")
     sub.add_parser("status", help="Show local store summary.")
 
     args = parser.parse_args(argv)
@@ -429,8 +329,7 @@ def main(argv=None):
         return 0
 
     if args.cmd == "test-auth":
-        cfg = credentials.load_config()
-        return 0 if test_auth(cfg) else 1
+        return 0 if test_auth() else 1
 
     if args.cmd == "status":
         print(json.dumps(store_summary(), indent=2, default=str))

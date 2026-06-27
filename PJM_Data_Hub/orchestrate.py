@@ -22,10 +22,12 @@ from pjm_core import credentials, paths
 from pjm_core.settlement_points import HUBS, PRIMARY_HUB
 
 
-def _update_hub_prices(all_hubs: bool = False) -> None:
+def _update_hub_prices(all_hubs: bool = True) -> None:
     from datasets.hub_prices.pjm_api import update
-    hubs = HUBS if all_hubs else [PRIMARY_HUB]
-    print(f"Updating hub prices for: {', '.join(hubs)}")
+    # gridstatus returns every hub in one call, so keep them all by default;
+    # --primary-only narrows the stored set to just DOMINION HUB.
+    hubs = None if all_hubs else [PRIMARY_HUB]
+    print(f"Updating hub prices ({'all hubs' if all_hubs else PRIMARY_HUB}) …")
     result = update(hubs=hubs)
     print(f"Done. {result['rows']:,} rows ({result['start']} → {result['end']})")
 
@@ -46,8 +48,8 @@ def main():
 
     up = sub.add_parser("update", help="Refresh a dataset")
     up.add_argument("dataset", choices=["hub_prices", "system_gen", "eia923", "all"])
-    up.add_argument("--all-hubs", action="store_true",
-                    help="Fetch all PJM trading hubs (default: DOM HUB only)")
+    up.add_argument("--primary-only", action="store_true",
+                    help="Store only DOMINION HUB (default: keep all PJM hubs)")
     up.add_argument("--years", nargs="*", type=int, default=None)
 
     sub.add_parser("status", help="Show store state")
@@ -63,7 +65,7 @@ def main():
     if args.cmd == "update":
         ds = args.dataset
         if ds in ("hub_prices", "all"):
-            _update_hub_prices(all_hubs=getattr(args, "all_hubs", False))
+            _update_hub_prices(all_hubs=not getattr(args, "primary_only", False))
         if ds in ("system_gen", "all"):
             _update_system_gen(years=args.years)
         if ds in ("eia923", "all"):

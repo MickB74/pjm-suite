@@ -127,10 +127,34 @@ cd PJM_Data_Hub
 
 | Key | Used by | Where to get |
 |---|---|---|
-| `subscription_key` | PJM Data Miner 2 (LMPs) | https://api.pjm.com/ (free) |
+| `subscription_key` | PJM Data Miner 2 (LMPs) | see below (free for non-members) |
 | `eia_api_key` | Henry Hub gas strip (price forecast) | https://www.eia.gov/opendata/ (free) |
 
 Secrets live in `PJM_Data_Hub/config.json` (git-ignored, chmod 600). Copy from `config.example.json`.
+
+### Getting a free PJM Data Miner 2 key as a non-member
+
+PJM gives **non-members free API access for internal business use** (per the
+official Data Miner API Guide):
+
+1. Register a PJM Tools account at
+   https://accountmanager.pjm.com/accountmanager/pages/public/new-user.jsf
+   (or via https://apiportal.pjm.com/ → *Sign up*).
+2. Email **accountmanager@pjm.com** with the exact statement:
+   *"I confirm that the PJM Data will be used for internal business purposes only."*
+   Include the username you registered and your email address.
+3. Once provisioned, sign in to https://apiportal.pjm.com/ → **View Profile** →
+   **Your Subscriptions** to copy your subscription key.
+4. Paste it into the **API Keys** page in the app (or `config.json`).
+
+> ⚠️ **Commercial use** — publishing the data or making derivatives of it for
+> external parties — requires a PJM **Associate Membership** (minimum). Internal
+> analysis (the use case for this suite) does not.
+
+The data fetch goes through the [`gridstatus`](https://github.com/gridstatus/gridstatus)
+library, which reads the key from `config.json` or the `PJM_API_KEY`
+environment variable and handles auth, pagination, the PJM date-range format,
+DST, and the canonical hub pnode names automatically.
 
 ---
 

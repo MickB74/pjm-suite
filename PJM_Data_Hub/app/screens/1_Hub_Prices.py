@@ -18,13 +18,14 @@ from pjm_core import paths
 from pjm_core.settlement_points import PRIMARY_HUB
 
 HUB_COLORS = {
-    "DOM HUB": "#1f77b4",
+    "DOMINION HUB": "#1f77b4",
     "AEP-DAYTON HUB": "#ff7f0e",
-    "COMED HUB": "#2ca02c",
-    "NI HUB": "#d62728",
-    "EASTERN HUB": "#9467bd",
-    "WESTERN HUB": "#8c564b",
-    "AECO HUB": "#e377c2",
+    "WESTERN HUB": "#2ca02c",
+    "EASTERN HUB": "#d62728",
+    "N ILLINOIS HUB": "#9467bd",
+    "CHICAGO HUB": "#8c564b",
+    "NEW JERSEY HUB": "#e377c2",
+    "OHIO HUB": "#17becf",
 }
 
 st.title("💵 PJM Hub Prices (Hourly RT LMP)")

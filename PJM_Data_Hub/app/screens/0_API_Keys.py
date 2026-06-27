@@ -51,7 +51,7 @@ c4.metric("Days since update", f"{days_stale:.1f}" if days_stale is not None els
 log_area = st.empty()
 log_lines: list[str] = []
 
-if st.button("Update Hub Prices (DOM HUB)", type="primary",
+if st.button("Update Hub Prices (all PJM hubs)", type="primary",
              disabled=not credentials.have_credentials(cfg)):
     def _log(msg):
         log_lines.append(msg)

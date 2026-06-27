@@ -9,16 +9,22 @@ PJM LMP = Energy Component + Congestion Component + Loss Component.
 
 from __future__ import annotations
 
-# PJM Aggregate Hub pricing nodes. These pnode_name values are used in the
-# Data Miner 2 API (rt_hrl_lmps / da_hrl_lmps).
+# PJM aggregate hub pnode_name values, exactly as PJM publishes them in the
+# rt_hrl_lmps feed (and as gridstatus returns them in the "Location" column).
+# These are the 12 PJM trading hubs. DOMINION HUB is our primary focus.
 HUBS = [
-    "DOM HUB",          # Dominion Hub (Virginia / North Carolina) — primary focus
-    "AEP-DAYTON HUB",   # AEP Ohio / Dayton Power & Light zone
-    "COMED HUB",        # ComEd (Northern Illinois)
-    "NI HUB",           # Northern Illinois (closely tracks COMED HUB)
-    "EASTERN HUB",      # Eastern aggregate
-    "WESTERN HUB",      # Western aggregate
-    "AECO HUB",         # Atlantic City Electric zone
+    "DOMINION HUB",      # Dominion zone (Virginia / North Carolina) — primary focus
+    "AEP-DAYTON HUB",    # AEP / Dayton Power & Light
+    "AEP GEN HUB",       # AEP generation hub
+    "ATSI GEN HUB",      # ATSI generation hub
+    "CHICAGO HUB",       # ComEd / Chicago
+    "CHICAGO GEN HUB",   # Chicago generation hub
+    "EASTERN HUB",       # Eastern aggregate
+    "WESTERN HUB",       # Western aggregate
+    "N ILLINOIS HUB",    # Northern Illinois
+    "NEW JERSEY HUB",    # New Jersey aggregate
+    "OHIO HUB",          # Ohio aggregate
+    "WEST INT HUB",      # Western interface hub
 ]
 
 # PJM load zones (used for zone-settled contracts)
@@ -29,7 +35,7 @@ ZONES = [
 ]
 
 # The primary hub for this suite
-PRIMARY_HUB = "DOM HUB"
+PRIMARY_HUB = "DOMINION HUB"
 
 # LMP component columns returned by the PJM Data Miner API
 LMP_COMPONENTS = ["total_lmp", "energy", "congestion", "loss"]
