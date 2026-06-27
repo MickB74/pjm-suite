@@ -1,0 +1,5 @@
+{
+  "subscription_key": "YOUR_PJM_DATAMINER_SUBSCRIPTION_KEY",
+  "eia_api_key": "YOUR_EIA_API_KEY",
+  "backfill_start": "2020-01-01"
+}

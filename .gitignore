@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data lake (local, not committed)
+PJM_Data_Hub/data/
+PJM_Data_Hub/logs/
+
+# Secrets
+PJM_Data_Hub/config.json
+config.json
+
+# Mac / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
