@@ -51,6 +51,7 @@ nav = st.navigation({
         st.Page(f"{P}/8_Hub_Basis.py", title="Hub Basis", icon="🧭"),
         st.Page(f"{P}/7_Capture_Price.py", title="Capture Price", icon="🎯"),
         st.Page(f"{P}/15_Plant_Earnings.py", title="Plant Earnings", icon="💰"),
+        st.Page(f"{P}/18_Full_Bill.py", title="Full Bill Estimator", icon="🧮"),
         st.Page(f"{P}/5_Invoice_Validation.py", title="Invoice Validation", icon="🧾"),
     ],
 })

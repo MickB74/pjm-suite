@@ -115,6 +115,69 @@ def auto_refresh(st_obj, *, force: bool = False) -> None:
         st_obj.cache_data.clear()
 
 
+def rate_explainer(st_obj, *, expanded: bool = False) -> None:
+    """Shared explainer: how the 5 coincident-peak hours set a customer's PLC and
+    capacity charge. Rendered as a collapsible expander so it can sit at the top
+    of any capacity-related screen (Peak Day Analysis, PLC Cost Calculator)."""
+    with st_obj.expander(
+            "💡 How these peak days set your price & how your rate is calculated",
+            expanded=expanded):
+        st_obj.markdown(
+            r"""
+These peak days aren't just trivia — they set your **capacity charge**, which is
+roughly **a quarter of a commercial load's all-in power cost**. Here's the chain
+from a peak hour to a dollar figure on your bill.
+
+**1 · The 5 peak days set the measuring stick (5CP).**
+Each summer PJM records the **5 highest RTO load hours of the year** (each on a
+separate day). Those five hours are the **only** hours all year that determine
+your capacity charge; the other ~8,755 hours don't count.
+
+**2 · Your load during those 5 hours = your Peak Load Contribution (PLC).**
+PJM averages *your* metered demand across those five coincident-peak hours, then
+grosses it up for losses and reserve margin:
+"""
+        )
+        st_obj.latex(r"PLC_{billed} = \left(\frac{1}{5}\sum_{i=1}^{5} MW_i\right)\times FPR")
+        st_obj.markdown(
+            r"""
+**FPR** = Forecast Pool Requirement / loss-&-reserve scaling (~1.05–1.10). This
+single PLC number is your **capacity obligation**, locked in for the whole
+**delivery year** (June 1 → May 31).
+
+**3 · Your rate = PLC × the capacity clearing price × 365.**
+"""
+        )
+        st_obj.latex(r"Annual\ capacity\ \$ = PLC \times RPM\ price\ \left(\tfrac{\$}{MW\text{-}day}\right) \times 365")
+        st_obj.markdown(
+            """
+- The **RPM clearing price** is set in PJM's capacity auction ~3 years ahead
+  (see the **Capacity (RPM)** screen) and is **zone/LDA-specific** — e.g. DOM
+  can price apart from the rest of the RTO.
+- Because the charge is fixed by just 5 hours, two customers with identical total
+  kWh can pay very different capacity bills.
+
+**The lever — peak shaving.** Cutting load during the *predicted* CP hours lowers
+next year's PLC and therefore your bill:
+"""
+        )
+        st_obj.latex(r"Savings = RPM\ price \times (MW_{shaved}\times FPR) \times 365")
+        st_obj.markdown(
+            """
+| Step | What sets it | Where in this app |
+|---|---|---|
+| Which 5 hours count | PJM's 5 highest RTO load hours (5CP) | **Peak Day Analysis** |
+| Your PLC (billed MW) | your load in those 5 hrs × FPR | **PLC Cost Calculator** |
+| The \\$/MW-day price | RPM capacity auction (LDA-specific) | **Capacity (RPM)** |
+| Your annual charge | PLC × price × 365 | **PLC Cost Calculator** |
+| Reducing it | shave load on predicted CP days | **5CP Peak Predictor** |
+
+*Simplified model — real PJM settlement layers on additional scaling; the PLC
+Cost Calculator lets you enter your FPR and metered load to get your own number.*
+            """
+        )
+
+
 def data_status(st_obj, *, path: Path, rows: int, span: tuple) -> None:
     dmin, dmax = span
     st_obj.caption(

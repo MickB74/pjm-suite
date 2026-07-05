@@ -15,7 +15,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pjm_core import paths
-from pjm_core.settlement_points import HUB_COORDS, PRIMARY_HUB
+from pjm_core.settlement_points import (
+    HUB_CLUSTERS, HUB_COORDS, HUB_HIERARCHY, PRIMARY_HUB,
+)
 
 HUB_COLORS = {
     "DOMINION HUB": "#1f77b4",
@@ -94,6 +96,14 @@ neg = price < 0
 st.caption(f"**{start} → {end}** ({n_days} days) · {market} · {', '.join(sel_hubs)} · {component}")
 
 st.subheader("Hub map")
+map_color = st.radio(
+    "Color hubs by", ["Average price", "Region cluster", "Hierarchy (nesting)"],
+    horizontal=True,
+    help="**Average price** shades each hub by its avg LMP over the period. "
+         "**Region cluster** groups hubs that overlap the same geography. "
+         "**Hierarchy (nesting)** draws lines from each broad regional hub down "
+         "to the narrower trading and generation hubs nested inside it. "
+         "See Markets Explained → Trading Hubs.")
 all_mask = (
     (df["market"] == market)
     & (df["datetime_beginning_ept"].dt.date >= start)
@@ -101,7 +111,9 @@ all_mask = (
 )
 map_avg = df[all_mask].groupby("pnode_name")[component].mean()
 map_rows = [
-    {"hub": hub, "lat": lat, "lon": lon, "price": map_avg.get(hub)}
+    {"hub": hub, "lat": lat, "lon": lon, "price": map_avg.get(hub),
+     "cluster": HUB_CLUSTERS.get(hub, "Other"),
+     "level": HUB_HIERARCHY.get(hub, (0, None))[0]}
     for hub, (lat, lon) in HUB_COORDS.items()
     if hub in hubs
 ]
@@ -110,29 +122,83 @@ if not map_df.empty:
     # Short label (drop the trailing "HUB") plus the price, shown next to each dot.
     map_df["short"] = map_df["hub"].str.replace(r"\s*HUB$", "", regex=True).str.title()
     map_df["label"] = map_df["short"] + "  $" + map_df["price"].round(0).astype(int).astype(str)
-    fig_map = px.scatter_mapbox(
-        map_df, lat="lat", lon="lon", color="price", size=map_df["price"].abs(),
-        size_max=34, text="label",
-        hover_name="hub", hover_data={"lat": False, "lon": False, "label": False,
-                                      "short": False, "price": ":.2f"},
-        color_continuous_scale="RdYlGn_r", zoom=4.4,
-        center={"lat": 39.5, "lon": -81.5},
-        labels={"price": f"Avg {component} ($/MWh)"},
+    common = dict(
+        lat="lat", lon="lon", text="label",
+        hover_name="hub", zoom=4.4, center={"lat": 39.5, "lon": -81.5},
     )
+    hover = {"lat": False, "lon": False, "label": False, "short": False,
+             "level": False, "cluster": True, "price": ":.2f"}
+    edge = None  # optional hierarchy connector-line trace (added under markers)
+
+    if map_color == "Region cluster":
+        fig_map = px.scatter_mapbox(
+            map_df, color="cluster", size=map_df["price"].abs(), size_max=34,
+            hover_data=hover, color_discrete_sequence=px.colors.qualitative.Set2,
+            labels={"cluster": "Region cluster"}, **common,
+        )
+        fig_map.update_layout(legend=dict(
+            title="Region cluster", orientation="h", yanchor="bottom", y=0.01,
+            xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)", font=dict(size=11)))
+    elif map_color == "Hierarchy (nesting)":
+        # Size markers by level: broad regional (0) biggest → generation node (2) smallest.
+        map_df["hsize"] = map_df["level"].map({0: 30, 1: 19, 2: 12}).fillna(19)
+        fig_map = px.scatter_mapbox(
+            map_df, color="cluster", size="hsize", size_max=30,
+            hover_data={**hover, "hsize": False},
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            labels={"cluster": "Region cluster"}, **common,
+        )
+        # Build child→parent connector segments (only when both hubs are shown).
+        coord = {r.hub: (r.lat, r.lon) for r in map_df.itertuples()}
+        e_lat: list = []
+        e_lon: list = []
+        for hub in map_df["hub"]:
+            parent = HUB_HIERARCHY.get(hub, (0, None))[1]
+            if parent and parent in coord:
+                (clat, clon), (plat, plon) = coord[hub], coord[parent]
+                e_lat += [clat, plat, None]
+                e_lon += [clon, plon, None]
+        if e_lat:
+            edge = go.Scattermapbox(
+                lat=e_lat, lon=e_lon, mode="lines",
+                line=dict(width=2, color="rgba(255,255,255,0.55)"),
+                hoverinfo="skip", showlegend=False)
+        fig_map.update_layout(legend=dict(
+            title="Region cluster", orientation="h", yanchor="bottom", y=0.01,
+            xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0.5)", font=dict(size=11)))
+    else:
+        fig_map = px.scatter_mapbox(
+            map_df, color="price", size=map_df["price"].abs(), size_max=34,
+            hover_data=hover, color_continuous_scale="RdYlGn_r",
+            labels={"price": f"Avg {component} ($/MWh)"}, **common,
+        )
+
+    # Style the marker traces (all traces so far are markers).
     fig_map.update_traces(
         mode="markers+text",
         textposition="top center",
         textfont=dict(size=13, color="white", family="Arial Black"),
-        marker=dict(sizemin=14, opacity=0.95),
+        marker=dict(sizemin=12, opacity=0.95),
     )
+    # Add connector lines beneath the markers (drawn first = underneath).
+    if edge is not None:
+        fig_map.add_trace(edge)
+        fig_map.data = (fig_map.data[-1],) + fig_map.data[:-1]
+
     fig_map.update_layout(
         mapbox_style="carto-darkmatter", height=480,
         margin=dict(t=10, b=0, l=0, r=0),
         font=dict(color="white"),
     )
     st.plotly_chart(fig_map, use_container_width=True)
-    st.caption(f"Average **{component}** by hub over {start} → {end} ({market}). "
-               "Hub locations are approximate representative points, not exact nodes.")
+    if map_color == "Region cluster":
+        _cap_extra = "Colors group hubs that overlap the same geography."
+    elif map_color == "Hierarchy (nesting)":
+        _cap_extra = ("Lines connect each broad regional hub to the narrower trading "
+                      "and generation hubs nested inside it (bigger dot = broader hub).")
+    else:
+        _cap_extra = "Hub locations are approximate representative points, not exact nodes."
+    st.caption(f"Average **{component}** by hub over {start} → {end} ({market}). {_cap_extra}")
 else:
     st.caption("No data available for the map over this period.")
 

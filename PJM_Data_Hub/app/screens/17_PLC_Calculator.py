@@ -34,6 +34,8 @@ st.caption("Enter your load during the five coincident peaks → your Peak Load 
            "Contribution → your annual PJM capacity charge at the RPM clearing "
            "price.")
 
+_common.rate_explainer(st)
+
 
 @st.cache_data(show_spinner=True)
 def _load():
@@ -67,9 +69,15 @@ if partial:
 
 # --- Enter your load at each CP hour ----------------------------------------
 st.subheader("Your metered load at each coincident peak")
-st.caption("Enter your facility's load (MW) during each of these five system-"
-           "peak hours. Leave a row blank to treat it as unknown (it's dropped "
-           "from the average).")
+st.info(
+    "**What to do:** in the table below, type your facility's metered load "
+    "(MW) into the **rightmost \"Your load (MW)\" column** — one value for each "
+    "of the five peak hours. That's the *only* column you edit; Rank, 5CP hour "
+    "and RTO peak are PJM's system numbers and are read-only.\n\n"
+    "Fill **all five rows** for a settlement-grade PLC. Leave a row blank only "
+    "if you don't know that hour's load — it's dropped from the average. Your "
+    "PLC and estimated capacity cost appear below once at least one row is "
+    "filled.")
 
 editor_rows = []
 for _, r in cp.iterrows():
@@ -77,7 +85,7 @@ for _, r in cp.iterrows():
         "Rank": int(r["rank"]),
         "5CP hour (EPT)": pd.to_datetime(r["peak_hour"]).strftime("%a %b %d, %Y %H:00"),
         "RTO peak (MW)": float(r["peak_mw"]),
-        "Your load (MW)": None,
+        "👉 Your load (MW)": None,
     })
 edf = pd.DataFrame(editor_rows)
 edited = st.data_editor(
@@ -85,13 +93,18 @@ edited = st.data_editor(
     disabled=["Rank", "5CP hour (EPT)", "RTO peak (MW)"],
     column_config={
         "RTO peak (MW)": st.column_config.NumberColumn(format="%.0f"),
-        "Your load (MW)": st.column_config.NumberColumn(
-            help="Your facility's metered MW during this hour.",
+        "👉 Your load (MW)": st.column_config.NumberColumn(
+            help="ENTER HERE — your facility's metered MW during this hour.",
             min_value=0.0, format="%.3f"),
     },
     key="cp_editor")
 
-your_vals = pd.to_numeric(edited["Your load (MW)"], errors="coerce").dropna()
+st.caption("These five hours are simply the summer's five highest RTO load "
+           "hours — any day of the week. They almost always land on hot weekday "
+           "afternoons (weekend/holiday load runs lower), but a very hot weekend "
+           "can appear.")
+
+your_vals = pd.to_numeric(edited["👉 Your load (MW)"], errors="coerce").dropna()
 
 # --- Settlement + capacity-price inputs -------------------------------------
 st.subheader("Capacity price & scaling")

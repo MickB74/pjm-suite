@@ -22,6 +22,7 @@ from pjm_core import paths
 
 ENV_SUBKEY = "PJM_API_SUBSCRIPTION_KEY"
 ENV_EIA = "EIA_API_KEY"
+ENV_URDB = "URDB_API_KEY"
 
 _REQUIRED = ("subscription_key",)
 
@@ -58,6 +59,19 @@ def save_eia_api_key(api_key: str) -> None:
     save_config(cfg)
     if api_key.strip():
         os.environ[ENV_EIA] = api_key.strip()
+
+
+def get_urdb_api_key() -> str:
+    """NREL OpenEI Utility Rate Database key (free at https://openei.org/services/api/)."""
+    return load_config().get("urdb_api_key", "") or os.environ.get(ENV_URDB, "")
+
+
+def save_urdb_api_key(api_key: str) -> None:
+    cfg = load_config()
+    cfg["urdb_api_key"] = api_key.strip()
+    save_config(cfg)
+    if api_key.strip():
+        os.environ[ENV_URDB] = api_key.strip()
 
 
 def export_to_env(cfg: dict | None = None) -> bool:

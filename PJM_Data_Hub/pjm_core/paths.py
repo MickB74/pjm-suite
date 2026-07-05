@@ -35,6 +35,7 @@ PRICE_FORECAST_DIR = DATA / "price_forecast"
 ANCILLARY_DIR = DATA / "ancillary"
 LOAD_DIR = DATA / "load"
 CAPACITY_DIR = DATA / "capacity"
+DELIVERY_DIR = DATA / "delivery_rates"
 WEATHER_DIR = DATA / "weather"
 CSV_EXPORTS_DIR = DATA / "csv_exports"
 LOGS_DIR = ROOT / "logs"
@@ -69,6 +70,11 @@ LOAD_STATE = LOAD_DIR / ".last_update.json"
 # Capacity (RPM Base Residual Auction clearing prices — user-maintained ref table)
 CAPACITY_CSV = CAPACITY_DIR / "rpm_bra_clearing_prices.csv"
 
+# Delivery / utility (EDC) C&I tariff components — user-maintained ref table,
+# seeded from filed tariffs and refreshable from the NREL OpenEI URDB API.
+DELIVERY_RATES_CSV = DELIVERY_DIR / "edc_ci_delivery_rates.csv"
+DELIVERY_URDB_RAW_DIR = DELIVERY_DIR / "urdb_raw"
+
 # Weather (ERA5 reanalysis via Open-Meteo, hourly, per PJM load center)
 WEATHER_PARQUET = WEATHER_DIR / "pjm_weather_hourly.parquet"
 WEATHER_CSV = WEATHER_DIR / "pjm_weather_hourly.csv"
@@ -78,6 +84,7 @@ _ALL_DIRS = [
     DATA, HUB_PRICES_DIR, ZONE_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
     EIA860_DIR, EIA860_RAW_DIR,
     PRICE_FORECAST_DIR, ANCILLARY_DIR, LOAD_DIR, CAPACITY_DIR, WEATHER_DIR,
+    DELIVERY_DIR, DELIVERY_URDB_RAW_DIR,
     CSV_EXPORTS_DIR, LOGS_DIR,
 ]
 

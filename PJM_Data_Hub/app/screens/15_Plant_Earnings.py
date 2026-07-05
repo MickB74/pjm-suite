@@ -228,7 +228,15 @@ if has_cap:
     tbl = plants.drop(columns=[c for c in drop_cols if c in plants.columns]).rename(columns=rename)
 else:
     tbl = plants.rename(columns=rename)
-st.dataframe(tbl.style.format(fmt), use_container_width=True, hide_index=True)
+# Direct link to each plant's EIA Electricity Data Browser page.
+tbl["EIA page"] = tbl["Plant ID"].map(plant_earnings.eia_plant_url)
+st.dataframe(
+    tbl.style.format(fmt), use_container_width=True, hide_index=True,
+    column_config={
+        "EIA page": st.column_config.LinkColumn(
+            "EIA page", display_text="View ↗",
+            help="Open this plant's generation & fuel history on eia.gov"),
+    })
 st.download_button(
     "⬇️ Download plant earnings (CSV)",
     tbl.to_csv(index=False).encode(),

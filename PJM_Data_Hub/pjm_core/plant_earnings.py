@@ -55,6 +55,19 @@ def _delivery_year(cal_year: int) -> str:
     return f"{cal_year}/{cal_year + 1}"
 
 
+# EIA's Electricity Data Browser plant page. Our plant_id IS the EIA/ORIS plant
+# code, so this deep-links straight to a plant's generation & fuel history.
+EIA_PLANT_URL = "https://www.eia.gov/electricity/data/browser/#/plant/{}"
+
+
+def eia_plant_url(plant_id) -> str | None:
+    """Link to a plant's EIA Electricity Data Browser page, or None if unknown."""
+    pid = str(plant_id).strip()
+    if not pid or pid.lower() in ("nan", "none", "<na>"):
+        return None
+    return EIA_PLANT_URL.format(pid)
+
+
 def estimate(years: list[int] | None = None, market: str = "DA",
              pjm_only: bool = True) -> pd.DataFrame:
     """Return a tidy plant × fuel × month table with estimated energy revenue.

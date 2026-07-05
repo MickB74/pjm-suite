@@ -82,5 +82,43 @@ HUB_COORDS = {
     "WEST INT HUB": (40.50, -80.50),         # Western PA/OH interface
 }
 
+# Regional clusters. Several hubs are drawn from overlapping geography (a hub is
+# just a basket of pnodes, and different hubs re-use the same nodes for different
+# purposes), so grouping them by region makes the overlap visible on the map.
+HUB_CLUSTERS = {
+    "DOMINION HUB": "Southern (Dominion)",
+    "EASTERN HUB": "Eastern (PECO/PSEG)",
+    "NEW JERSEY HUB": "Eastern (PECO/PSEG)",
+    "WESTERN HUB": "Western Hub benchmark",
+    "WEST INT HUB": "Western Hub benchmark",
+    "AEP-DAYTON HUB": "AEP / W. Ohio",
+    "AEP GEN HUB": "AEP / W. Ohio",
+    "OHIO HUB": "AEP / W. Ohio",
+    "ATSI GEN HUB": "AEP / W. Ohio",
+    "N ILLINOIS HUB": "ComEd / Chicago",
+    "CHICAGO HUB": "ComEd / Chicago",
+    "CHICAGO GEN HUB": "ComEd / Chicago",
+}
+
+# Conceptual nesting of the hubs: a broad regional aggregate contains narrower
+# trading hubs, which in turn sit "above" the generation-weighted node hubs of
+# the same area. This is a readability aid (broad → trading → generation), not an
+# official PJM parent/child relationship. Format: hub -> (level, parent_or_None).
+#   level 0 = broad regional / benchmark, 1 = trading/zone, 2 = generation node
+HUB_HIERARCHY = {
+    "WESTERN HUB":     (0, None),              # RTO trading benchmark
+    "WEST INT HUB":    (1, "WESTERN HUB"),
+    "OHIO HUB":        (0, None),              # broad Ohio aggregate
+    "AEP-DAYTON HUB":  (1, "OHIO HUB"),
+    "AEP GEN HUB":     (2, "AEP-DAYTON HUB"),
+    "ATSI GEN HUB":    (1, "OHIO HUB"),
+    "N ILLINOIS HUB":  (0, None),              # broad ComEd aggregate
+    "CHICAGO HUB":     (1, "N ILLINOIS HUB"),
+    "CHICAGO GEN HUB": (2, "CHICAGO HUB"),
+    "EASTERN HUB":     (0, None),
+    "NEW JERSEY HUB":  (0, None),
+    "DOMINION HUB":    (0, None),
+}
+
 # LMP component columns returned by the PJM Data Miner API
 LMP_COMPONENTS = ["total_lmp", "energy", "congestion", "loss"]

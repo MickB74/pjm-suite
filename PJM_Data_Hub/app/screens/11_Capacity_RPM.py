@@ -32,6 +32,43 @@ st.info(
     f"Edit `{paths.CAPACITY_CSV}` to update as new auctions clear.",
     icon="ℹ️")
 
+with st.expander("How PJM meets its capacity obligation — the two paths"):
+    st.markdown(
+        "PJM runs **one** capacity construct — the **Reliability Pricing Model "
+        "(RPM)** — but a load-serving entity (LSE) can meet its obligation two "
+        "ways:")
+    p1, p2 = st.columns(2)
+    with p1:
+        st.markdown(
+            "#### 1 · RPM auctions — *the default*\n"
+            "The competitive, price-based path most of PJM uses.\n\n"
+            "- **How:** PJM buys capacity in the **Base Residual Auction (BRA)**, "
+            "~3 years ahead of the Delivery Year, plus **Incremental Auctions** "
+            "to true up closer to real time.\n"
+            "- **Pricing:** A downward-sloping **Variable Resource Requirement "
+            "(VRR)** demand curve crosses supply to set a price in **$/MW-day**, "
+            "priced separately by **LDA** so constrained zones clear higher.\n"
+            "- **Who sells:** Generators, demand response, energy efficiency, "
+            "storage.\n"
+            "- **Applies to:** Merchant generators & competitive LSEs, which pay "
+            "the **Locational Reliability Charge** at their zone's price.")
+    with p2:
+        st.markdown(
+            "#### 2 · FRR — *the opt-out*\n"
+            "Fixed Resource Requirement: self-supply instead of the auction.\n\n"
+            "- **How:** The entity files an **FRR Capacity Plan** committing "
+            "enough resources to cover its full **UCAP** obligation plus reserve "
+            "margin for its zone.\n"
+            "- **Commitment:** All-or-nothing and multi-year — once elected, "
+            "**all load in that zone** is served under FRR (no dipping in and "
+            "out of the auction to arbitrage price).\n"
+            "- **Applies to:** Vertically integrated / regulated utilities, "
+            "cooperatives, and municipal utilities that own generation and "
+            "prefer price certainty over auction exposure.")
+    st.caption(
+        "In one line — **RPM:** market-price exposure, flexibility, competition. "
+        "**FRR:** self-supply, price certainty, long-term commitment.")
+
 df = capacity.load()
 if df.empty:
     st.warning("No capacity reference data.")

@@ -99,6 +99,8 @@ dmin = load_df["datetime_beginning_ept"].min().date()
 dmax = load_df["datetime_beginning_ept"].max().date()
 _common.data_status(st, path=paths.LOAD_PARQUET, rows=len(load_df), span=(dmin, dmax))
 
+_common.rate_explainer(st)
+
 hubs = sorted(prices_df["pnode_name"].unique()) if not prices_df.empty else []
 
 # --- Controls ---------------------------------------------------------------

@@ -72,13 +72,31 @@ fig = px.area(daily_long, x="datetime_beginning_ept", y="gen_mw", color="fuel",
 fig.update_layout(height=420, margin=dict(t=30))
 st.plotly_chart(fig, use_container_width=True)
 
-# Summary table
+# Summary table + fuel-mix pie
 st.subheader("Average output by fuel")
 st.caption("Average MW over the selected period, and each fuel's share of total generation.")
 summary = sub[fuel_cols].mean().rename("avg_mw").reset_index()
 summary.columns = ["Fuel", "Avg MW", ]
 summary["Share"] = summary["Avg MW"] / summary["Avg MW"].sum()
 summary = summary.sort_values("Avg MW", ascending=False).reset_index(drop=True)
-st.dataframe(
-    summary.style.format({"Avg MW": "{:,.0f}", "Share": "{:.1%}"}),
-    use_container_width=True, hide_index=True)
+
+tbl_col, pie_col = st.columns([1, 1])
+with tbl_col:
+    st.dataframe(
+        summary.style.format({"Avg MW": "{:,.0f}", "Share": "{:.1%}"}),
+        use_container_width=True, hide_index=True)
+
+with pie_col:
+    pie = px.pie(
+        summary, names="Fuel", values="Avg MW", hole=0.45,
+        color="Fuel", color_discrete_map=color_map,
+        title="Fuel mix (share of avg generation)")
+    pie.update_traces(
+        textposition="inside", textinfo="percent+label",
+        hovertemplate="<b>%{label}</b><br>%{value:,.0f} MW<br>%{percent}<extra></extra>",
+        sort=False)
+    pie.update_layout(
+        height=420, margin=dict(t=40, b=0, l=0, r=0),
+        legend=dict(orientation="v", x=1, y=0.5),
+        uniformtext_minsize=10, uniformtext_mode="hide")
+    st.plotly_chart(pie, use_container_width=True)
