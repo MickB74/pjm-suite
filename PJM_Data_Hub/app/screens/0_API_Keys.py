@@ -12,6 +12,10 @@ import _common  # noqa: F401
 import streamlit as st
 from pjm_core import credentials, paths
 from datasets.hub_prices import pjm_api
+from datasets.zone_prices import pjm_zone_prices
+from datasets.ancillary import pjm_as
+from datasets.load import pjm_load
+from datasets.weather import pjm_weather
 
 st.title("🔑 API Keys & Control Tower")
 
@@ -40,6 +44,16 @@ with st.expander("EIA API Key (optional — for price forecast gas strip)"):
 st.divider()
 st.subheader("Data Updates")
 
+auto_on = st.toggle(
+    "🔄 Auto-refresh all data when the app opens",
+    value=cfg.get("auto_refresh", True),
+    help="Incrementally pulls the latest hub prices, ancillary, load, and weather "
+         "each time you open the app. Updates are incremental, so it's fast when "
+         "data is already current. The buttons below still work for a manual refresh.")
+if auto_on != cfg.get("auto_refresh", True):
+    cfg["auto_refresh"] = auto_on
+    credentials.save_config(cfg)
+
 summary = pjm_api.store_summary()
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Hub price rows", f"{summary.get('rows', 0):,}")
@@ -48,17 +62,59 @@ c3.metric("End", summary.get("end", "—"))
 days_stale = summary.get("days_since_update")
 c4.metric("Days since update", f"{days_stale:.1f}" if days_stale is not None else "never")
 
+mkts = summary.get("markets", {})
+if mkts:
+    st.caption("  ·  ".join(
+        f"**{m}**: {v['rows']:,} rows through {str(v['end'])[:10]}"
+        for m, v in sorted(mkts.items())))
+
 log_area = st.empty()
 log_lines: list[str] = []
 
-if st.button("Update Hub Prices (all PJM hubs)", type="primary",
-             disabled=not credentials.have_credentials(cfg)):
+def _run_update(fn, label):
     def _log(msg):
         log_lines.append(msg)
         log_area.text("\n".join(log_lines[-40:]))
-    with st.spinner("Fetching from PJM …"):
+    with st.spinner(f"Fetching {label} from PJM …"):
         try:
-            result = pjm_api.update(progress_callback=_log)
-            st.success(f"Done — {result['rows']:,} rows.")
+            result = fn(progress_callback=_log)
+            st.success(f"{label}: done — {result['rows']:,} rows.")
         except Exception as e:
-            st.error(f"Update failed: {e}")
+            st.error(f"{label} update failed: {e}")
+
+
+if st.button("Update Hub Prices (all PJM hubs, RT + DA)", type="primary",
+             disabled=not credentials.have_credentials(cfg)):
+    _run_update(pjm_api.update, "Hub prices")
+
+# --- Zone LMPs (monthly avg, powers Plant Earnings) --------------------------
+zp_sum = pjm_zone_prices.store_summary()
+st.caption(f"💰 **Zone LMPs (monthly avg)** — {zp_sum.get('rows', 0):,} zone-month rows · "
+           f"{zp_sum.get('start','—')} → {zp_sum.get('end','—')} · "
+           f"{len(zp_sum.get('zones', []))} zones · powers the **Plant Earnings** estimate.")
+if st.button("Update Zone LMPs (RT + DA)", disabled=not credentials.have_credentials(cfg)):
+    _run_update(pjm_zone_prices.update, "Zone LMPs")
+
+# --- Ancillary services + load stores ---------------------------------------
+as_sum = pjm_as.store_summary()
+ld_sum = pjm_load.store_summary()
+a1, a2 = st.columns(2)
+a1.metric("Ancillary rows", f"{as_sum.get('rows', 0):,}",
+          help=f"{as_sum.get('start','—')} → {as_sum.get('end','—')}")
+a2.metric("Load rows", f"{ld_sum.get('rows', 0):,}",
+          help=f"{ld_sum.get('start','—')} → {ld_sum.get('end','—')}")
+
+b1, b2 = st.columns(2)
+if b1.button("Update Ancillary Services", disabled=not credentials.have_credentials(cfg)):
+    _run_update(pjm_as.update, "Ancillary services")
+if b2.button("Update System Load", disabled=not credentials.have_credentials(cfg)):
+    _run_update(pjm_load.update, "System load")
+
+# --- Weather (ERA5 via Open-Meteo — no API key needed) ----------------------
+wx_sum = pjm_weather.store_summary()
+st.caption(f"🌡️ **Weather (ERA5)** — {wx_sum.get('rows', 0):,} rows · "
+           f"{str(wx_sum.get('start','—'))[:10]} → {str(wx_sum.get('end','—'))[:10]} · "
+           "free, no key (Open-Meteo). Auto-aligns to the load store window; "
+           "used by 5CP & Peak Day Analysis.")
+if st.button("Update Weather (ERA5)"):
+    _run_update(pjm_weather.update, "Weather (ERA5)")

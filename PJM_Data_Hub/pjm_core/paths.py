@@ -25,10 +25,17 @@ DATA = Path(os.environ.get("PJM_HUB_DATA", ROOT / "data"))
 
 # --- per-dataset directories --------------------------------------------------
 HUB_PRICES_DIR = DATA / "hub_prices"
+ZONE_PRICES_DIR = DATA / "zone_prices"
 SYSTEM_GEN_DIR = DATA / "system_gen"
 EIA_DIR = DATA / "eia923"
 EIA_RAW_DIR = EIA_DIR / "raw"
+EIA860_DIR = DATA / "eia860"
+EIA860_RAW_DIR = EIA860_DIR / "raw"
 PRICE_FORECAST_DIR = DATA / "price_forecast"
+ANCILLARY_DIR = DATA / "ancillary"
+LOAD_DIR = DATA / "load"
+CAPACITY_DIR = DATA / "capacity"
+WEATHER_DIR = DATA / "weather"
 CSV_EXPORTS_DIR = DATA / "csv_exports"
 LOGS_DIR = ROOT / "logs"
 
@@ -39,9 +46,39 @@ HUB_PRICES_PARQUET = HUB_PRICES_DIR / "pjm_hub_prices_hourly.parquet"
 HUB_PRICES_CSV = HUB_PRICES_DIR / "pjm_hub_prices_hourly.csv"
 HUB_PRICES_STATE = HUB_PRICES_DIR / ".last_update.json"
 
+# Zone LMPs, aggregated to a monthly average per zone × market. Used to value
+# EIA-923 monthly plant generation for the Plant Earnings estimate.
+ZONE_PRICES_PARQUET = ZONE_PRICES_DIR / "pjm_zone_lmp_monthly.parquet"
+ZONE_PRICES_CSV = ZONE_PRICES_DIR / "pjm_zone_lmp_monthly.csv"
+ZONE_PRICES_STATE = ZONE_PRICES_DIR / ".last_update.json"
+
+# Plant → PJM zone overrides (user-maintained crosswalk, keyed by EIA plant_id).
+# Refines the state-based default mapping for individual plants. Editable in-app.
+PLANT_ZONE_OVERRIDES_CSV = ZONE_PRICES_DIR / "plant_zone_overrides.csv"
+
+# Ancillary services (reserve + regulation market clearing prices)
+ANCILLARY_PARQUET = ANCILLARY_DIR / "pjm_ancillary_hourly.parquet"
+ANCILLARY_CSV = ANCILLARY_DIR / "pjm_ancillary_hourly.csv"
+ANCILLARY_STATE = ANCILLARY_DIR / ".last_update.json"
+
+# System load (hourly metered load by zone)
+LOAD_PARQUET = LOAD_DIR / "pjm_load_hourly.parquet"
+LOAD_CSV = LOAD_DIR / "pjm_load_hourly.csv"
+LOAD_STATE = LOAD_DIR / ".last_update.json"
+
+# Capacity (RPM Base Residual Auction clearing prices — user-maintained ref table)
+CAPACITY_CSV = CAPACITY_DIR / "rpm_bra_clearing_prices.csv"
+
+# Weather (ERA5 reanalysis via Open-Meteo, hourly, per PJM load center)
+WEATHER_PARQUET = WEATHER_DIR / "pjm_weather_hourly.parquet"
+WEATHER_CSV = WEATHER_DIR / "pjm_weather_hourly.csv"
+WEATHER_STATE = WEATHER_DIR / ".last_update.json"
+
 _ALL_DIRS = [
-    DATA, HUB_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
-    PRICE_FORECAST_DIR, CSV_EXPORTS_DIR, LOGS_DIR,
+    DATA, HUB_PRICES_DIR, ZONE_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
+    EIA860_DIR, EIA860_RAW_DIR,
+    PRICE_FORECAST_DIR, ANCILLARY_DIR, LOAD_DIR, CAPACITY_DIR, WEATHER_DIR,
+    CSV_EXPORTS_DIR, LOGS_DIR,
 ]
 
 
@@ -53,6 +90,9 @@ def ensure_dirs() -> None:
 
 DATASETS = {
     "hub_prices": "PJM hub LMPs (hourly RTM)",
+    "zone_prices": "PJM zone LMPs (monthly avg, for plant earnings)",
     "system_gen": "PJM system generation by fuel",
+    "ancillary": "PJM ancillary services (reserve + regulation MCP)",
+    "load": "PJM hourly metered load by zone",
     "eia923": "EIA-923 plant monthly generation & fuel",
 }

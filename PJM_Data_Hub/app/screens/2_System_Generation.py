@@ -24,7 +24,9 @@ FUEL_COLORS = {
 }
 
 st.title("🔥 PJM System Generation by Fuel")
-st.caption("Hourly generation mix via gridstatus (EIA-930 / PJM real-time).")
+st.caption("Hourly system-wide generation (MW) for each fuel, from PJM Data "
+           "Miner 2's gen_by_fuel feed. Pick a period to see the daily mix and "
+           "each fuel's average output and share.")
 
 gen_dir = paths.SYSTEM_GEN_DIR
 files = sorted(gen_dir.glob("pjm_gen_by_fuel_*.parquet")) if gen_dir.exists() else []
@@ -71,7 +73,12 @@ fig.update_layout(height=420, margin=dict(t=30))
 st.plotly_chart(fig, use_container_width=True)
 
 # Summary table
+st.subheader("Average output by fuel")
+st.caption("Average MW over the selected period, and each fuel's share of total generation.")
 summary = sub[fuel_cols].mean().rename("avg_mw").reset_index()
-summary.columns = ["fuel", "avg_mw"]
-summary["share_pct"] = summary["avg_mw"] / summary["avg_mw"].sum() * 100
-st.dataframe(summary.sort_values("avg_mw", ascending=False).reset_index(drop=True), use_container_width=True)
+summary.columns = ["Fuel", "Avg MW", ]
+summary["Share"] = summary["Avg MW"] / summary["Avg MW"].sum()
+summary = summary.sort_values("Avg MW", ascending=False).reset_index(drop=True)
+st.dataframe(
+    summary.style.format({"Avg MW": "{:,.0f}", "Share": "{:.1%}"}),
+    use_container_width=True, hide_index=True)

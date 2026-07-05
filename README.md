@@ -1,6 +1,6 @@
 # PJM Suite
 
-A PJM-footprint equivalent of the ercot-suite, focused on **PJM DOM Hub** (Dominion Hub, Virginia). Pulls hourly Real-Time LMPs, PJM system generation by fuel, and EIA-923 plant data; runs a Monte Carlo forward price forecast; and hosts everything in a Streamlit Data Hub.
+A PJM-footprint equivalent of the ercot-suite, focused on **PJM DOM Hub** (Dominion Hub, Virginia). Pulls hourly Real-Time **and Day-Ahead** LMPs for **all 12 PJM trading hubs**, PJM system generation by fuel, and EIA-923 plant data; runs a Monte Carlo forward price forecast; validates invoices against published LMPs; and hosts everything in a Streamlit Data Hub.
 
 ---
 
@@ -33,10 +33,10 @@ Or skip the data pull and just build the environment:
 |---|---|
 | `PJM_Data_Hub/` | Shared engine (`pjm_core`), data lake, Streamlit app, CLI orchestrator |
 | `PJM_Data_Hub/pjm_core/` | Timezone (Eastern), paths, credentials, prices, settlement math, price forecast |
-| `PJM_Data_Hub/datasets/hub_prices/` | PJM DOM Hub hourly LMP ETL (`pjm_api.py`) |
+| `PJM_Data_Hub/datasets/hub_prices/` | Hourly RT + DA LMP ETL for all 12 PJM hubs (`pjm_api.py`) |
 | `PJM_Data_Hub/datasets/system_gen_by_fuel/` | PJM fuel mix via gridstatus (hourly, EIA-930) |
 | `PJM_Data_Hub/datasets/eia923/` | EIA Form 923 plant-level generation for PJM states |
-| `PJM_Data_Hub/app/` | Streamlit Hub: Hub Prices, System Generation, EIA-923, Price Forecast |
+| `PJM_Data_Hub/app/` | Streamlit Hub: Hub Prices, System Generation, EIA-923, Price Forecast, Invoice Validation |
 
 ---
 
@@ -44,7 +44,8 @@ Or skip the data pull and just build the environment:
 
 | Source | What | API | Lag |
 |---|---|---|---|
-| **PJM RT LMPs** | Hourly RT LMPs at DOM HUB (and other hubs) | PJM Data Miner 2 (`api.pjm.com`) | ~1 day |
+| **PJM RT LMPs** | Hourly RT LMPs at all 12 trading hubs | PJM Data Miner 2 (`api.pjm.com`) | ~1 day |
+| **PJM DA LMPs** | Hourly Day-Ahead LMPs at all 12 trading hubs | PJM Data Miner 2 (`api.pjm.com`) | same day |
 | **PJM Fuel Mix** | Hourly generation by fuel (system-wide) | gridstatus → EIA-930 | ~2 days |
 | **EIA Form 923** | Monthly plant net generation & fuel | EIA file download | ~6 months |
 
@@ -72,6 +73,7 @@ Each hourly LMP has three components:
 ```
 data/
   hub_prices/     pjm_hub_prices_hourly.parquet, .last_update.json
+                  (one row per hub × hour × market; market ∈ {RT, DA})
   system_gen/     pjm_gen_by_fuel_<year>.parquet
   eia923/         eia923_pjm_<year>.parquet, raw/ (cached ZIPs)
   price_forecast/ pjm_forecast_DOM_HUB_<date>.parquet
@@ -109,16 +111,37 @@ Sign: offtaker-signed (positive = offtaker receives). Default: `price_floor=0.0`
 
 ---
 
+## Invoice validation (`pjm_core/invoice.py`)
+
+The **Invoice Validation** screen reconciles an uploaded invoice / settlement
+statement (any CSV/Excel with an interval timestamp plus some of {price $/MWh,
+volume MWh, amount $}) against the cached RT or DA LMP at any of the 12 PJM
+hubs, interval by interval:
+
+- Column roles are auto-guessed and user-correctable; "Hour Ending" labels and
+  sub-hourly (5/15/30-min) rows are handled — sub-hourly rows match the LMP for
+  the hour that contains them.
+- Both sides are lifted to tz-aware Eastern before joining, so the November
+  fall-back hour reconciles on the absolute instant, not the repeated label.
+- Per-interval statuses: `match`, `price_mismatch`, `amount_mismatch`,
+  `missing_in_invoice`, `extra_in_invoice`; summary shows the signed $ variance
+  (positive = overbilled) and the worst offenders. Results download as CSV.
+
+---
+
 ## CLI
 
 ```bash
 cd PJM_Data_Hub
-.venv/bin/python orchestrate.py update hub_prices          # DOM HUB only
-.venv/bin/python orchestrate.py update hub_prices --all-hubs  # all PJM hubs
+.venv/bin/python orchestrate.py update hub_prices                 # all hubs, RT + DA
+.venv/bin/python orchestrate.py update hub_prices --primary-only  # DOM HUB only
 .venv/bin/python orchestrate.py update system_gen
 .venv/bin/python orchestrate.py update eia923
 .venv/bin/python orchestrate.py update all
 .venv/bin/python orchestrate.py status
+
+# dataset-level CLI (finer control)
+.venv/bin/python datasets/hub_prices/pjm_api.py update --markets RT   # RT only
 ```
 
 ---

@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pjm_core import paths
-from pjm_core.settlement_points import PRIMARY_HUB
+from pjm_core.settlement_points import HUB_COORDS, PRIMARY_HUB
 
 HUB_COLORS = {
     "DOMINION HUB": "#1f77b4",
@@ -28,15 +28,18 @@ HUB_COLORS = {
     "OHIO HUB": "#17becf",
 }
 
-st.title("💵 PJM Hub Prices (Hourly RT LMP)")
-st.caption("Real-Time hourly LMPs from PJM Data Miner 2 (api.pjm.com). "
-           "LMP = Energy + Congestion + Loss.")
+st.title("💵 PJM Hub Prices (Hourly LMP)")
+st.caption("Real-Time and Day-Ahead hourly LMPs from PJM Data Miner 2 "
+           "(api.pjm.com). LMP = Energy + Congestion + Loss.")
 
 
 @st.cache_data(show_spinner=True)
 def load() -> pd.DataFrame:
     if paths.HUB_PRICES_PARQUET.exists():
-        return pd.read_parquet(paths.HUB_PRICES_PARQUET)
+        df = pd.read_parquet(paths.HUB_PRICES_PARQUET)
+        if not df.empty and "market" not in df.columns:
+            df["market"] = "RT"  # pre-DA stores are all real-time
+        return df
     return pd.DataFrame()
 
 
@@ -55,10 +58,16 @@ _common.data_status(st, path=paths.HUB_PRICES_PARQUET, rows=len(df), span=(dmin,
 
 with st.container(border=True):
     st.header("Filters")
+    markets = sorted(df["market"].unique())
+    market = st.radio("Market", markets, index=markets.index("RT") if "RT" in markets else 0,
+                      horizontal=True, help="RT = real-time hourly, DA = day-ahead hourly.")
     sel_hubs = st.multiselect("Hubs", hubs, default=[PRIMARY_HUB])
     start, end = _common.period_picker(st, key="hub", min_year=dmin.year, default_mode="Month")
     freq = st.selectbox("Resample", ["Hourly", "Daily", "Weekly"], index=1)
-    component = st.selectbox("LMP Component", ["total_lmp", "energy", "congestion", "loss"], index=0)
+    component = st.selectbox("LMP Component", ["total_lmp", "energy", "congestion", "loss"],
+                             index=0, help=_common.LMP_COMPONENT_HELP)
+    with st.expander("What are the LMP components?"):
+        st.markdown(_common.LMP_COMPONENT_HELP)
     scarcity = st.number_input("Scarcity threshold ($/MWh)", min_value=0, value=200, step=50)
     logy = st.checkbox("Log price axis", value=False)
 
@@ -67,7 +76,8 @@ if not sel_hubs:
     st.stop()
 
 mask = (
-    df["pnode_name"].isin(sel_hubs)
+    (df["market"] == market)
+    & df["pnode_name"].isin(sel_hubs)
     & (df["datetime_beginning_ept"].dt.date >= start)
     & (df["datetime_beginning_ept"].dt.date <= end)
 )
@@ -81,7 +91,50 @@ n_days = (end - start).days + 1
 spike = price >= scarcity
 neg = price < 0
 
-st.caption(f"**{start} → {end}** ({n_days} days) · {', '.join(sel_hubs)} · {component}")
+st.caption(f"**{start} → {end}** ({n_days} days) · {market} · {', '.join(sel_hubs)} · {component}")
+
+st.subheader("Hub map")
+all_mask = (
+    (df["market"] == market)
+    & (df["datetime_beginning_ept"].dt.date >= start)
+    & (df["datetime_beginning_ept"].dt.date <= end)
+)
+map_avg = df[all_mask].groupby("pnode_name")[component].mean()
+map_rows = [
+    {"hub": hub, "lat": lat, "lon": lon, "price": map_avg.get(hub)}
+    for hub, (lat, lon) in HUB_COORDS.items()
+    if hub in hubs
+]
+map_df = pd.DataFrame(map_rows).dropna(subset=["price"]).reset_index(drop=True)
+if not map_df.empty:
+    # Short label (drop the trailing "HUB") plus the price, shown next to each dot.
+    map_df["short"] = map_df["hub"].str.replace(r"\s*HUB$", "", regex=True).str.title()
+    map_df["label"] = map_df["short"] + "  $" + map_df["price"].round(0).astype(int).astype(str)
+    fig_map = px.scatter_mapbox(
+        map_df, lat="lat", lon="lon", color="price", size=map_df["price"].abs(),
+        size_max=34, text="label",
+        hover_name="hub", hover_data={"lat": False, "lon": False, "label": False,
+                                      "short": False, "price": ":.2f"},
+        color_continuous_scale="RdYlGn_r", zoom=4.4,
+        center={"lat": 39.5, "lon": -81.5},
+        labels={"price": f"Avg {component} ($/MWh)"},
+    )
+    fig_map.update_traces(
+        mode="markers+text",
+        textposition="top center",
+        textfont=dict(size=13, color="white", family="Arial Black"),
+        marker=dict(sizemin=14, opacity=0.95),
+    )
+    fig_map.update_layout(
+        mapbox_style="carto-darkmatter", height=480,
+        margin=dict(t=10, b=0, l=0, r=0),
+        font=dict(color="white"),
+    )
+    st.plotly_chart(fig_map, use_container_width=True)
+    st.caption(f"Average **{component}** by hub over {start} → {end} ({market}). "
+               "Hub locations are approximate representative points, not exact nodes.")
+else:
+    st.caption("No data available for the map over this period.")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Avg $/MWh", f"{price.mean():,.2f}")
@@ -122,5 +175,8 @@ if PRIMARY_HUB in sel_hubs:
     if not pivot.empty:
         fig2 = px.imshow(pivot, labels={"x": "Hour (EPT)", "y": "Month", "color": "$/MWh"},
                          aspect="auto", color_continuous_scale="RdYlGn_r")
-        fig2.update_layout(height=max(300, len(pivot) * 18), margin=dict(t=20))
+        # Month labels like "2026-06" parse as dates and garble the axis.
+        fig2.update_yaxes(type="category")
+        fig2.update_xaxes(type="category")
+        fig2.update_layout(height=max(300, len(pivot) * 30), margin=dict(t=20))
         st.plotly_chart(fig2, use_container_width=True)

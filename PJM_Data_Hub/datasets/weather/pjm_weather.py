@@ -313,14 +313,12 @@ def load(start=None, end_excl=None, cities=None) -> pd.DataFrame:
     return df.sort_values(["datetime_beginning_ept", "city"]).reset_index(drop=True)
 
 
-def weighted_temp(start=None, end_excl=None, zone: str | None = None) -> pd.DataFrame:
-    """Population-weighted PJM (or single-zone) hourly temperature & apparent temp.
+def _pop_weighted(df: pd.DataFrame, zone: str | None = None) -> pd.DataFrame:
+    """Collapse a per-city hourly frame to one pop-weighted row per hour.
 
-    Returns columns [datetime_beginning_ept, temp_f, apparent_f, rh_pct]. When
-    ``zone`` is given, only that zone's cities are averaged (unweighted if a
-    single city), otherwise all load centers weighted by metro population.
+    Shared by :func:`weighted_temp` (stored ERA5) and :func:`forecast_weighted`
+    (upcoming forecast). ``zone`` restricts to a single PJM zone's cities.
     """
-    df = load(start=start, end_excl=end_excl)
     if df.empty:
         return pd.DataFrame(columns=["datetime_beginning_ept"] + VALUE_COLS)
     pts = weather_points.points()[["city", "pop_weight"]]
@@ -342,6 +340,36 @@ def weighted_temp(start=None, end_excl=None, zone: str | None = None) -> pd.Data
         den = w.groupby(g).sum().replace(0.0, float("nan"))
         res[c] = num / den
     return res.reset_index().sort_values("datetime_beginning_ept").reset_index(drop=True)
+
+
+def weighted_temp(start=None, end_excl=None, zone: str | None = None) -> pd.DataFrame:
+    """Population-weighted PJM (or single-zone) hourly temperature & apparent temp.
+
+    Returns columns [datetime_beginning_ept, temp_f, apparent_f, rh_pct]. When
+    ``zone`` is given, only that zone's cities are averaged (unweighted if a
+    single city), otherwise all load centers weighted by metro population.
+    """
+    return _pop_weighted(load(start=start, end_excl=end_excl), zone=zone)
+
+
+def forecast_weighted(days: int = 16, zone: str | None = None) -> pd.DataFrame:
+    """Population-weighted **forecast** temperature for the next ``days`` days.
+
+    Pulls the Open-Meteo forecast endpoint (near-real-time model, up to +16
+    days) for every load center and collapses to one pop-weighted row per hour,
+    matching :func:`weighted_temp`'s columns. This is live forecast data — it is
+    *not* written to the ERA5 store; the 5CP peak predictor consumes it in
+    memory. Returns empty on any fetch failure so callers can degrade cleanly.
+    """
+    from pjm_core import tz
+    days = max(1, min(int(days), 16))     # Open-Meteo forecast horizon caps at 16
+    today = tz.now_eastern().date()
+    try:
+        df = fetch(today, today + timedelta(days=days - 1),
+                   log=lambda *_: None, source="recent")
+    except Exception:
+        return pd.DataFrame(columns=["datetime_beginning_ept"] + VALUE_COLS)
+    return _pop_weighted(df, zone=zone)
 
 
 def main(argv=None):

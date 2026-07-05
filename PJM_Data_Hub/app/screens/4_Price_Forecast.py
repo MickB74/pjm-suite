@@ -16,10 +16,13 @@ import streamlit as st
 from pjm_core import credentials, paths, price_forecast
 from pjm_core.settlement_points import HUBS, PRIMARY_HUB
 
-st.title("📉 PJM DOM Hub Price Forecast")
+st.title("📉 PJM Hub Price Forecast")
 st.caption(
-    "Monthly P10/P50/P90 forward power price via implied heat rate × Henry Hub gas strip "
-    "with Monte Carlo (5,000 paths). Method mirrors the ERCOT price forecaster."
+    "Forward monthly power price ($/MWh) for the selected hub. The band shows "
+    "the range of outcomes: P50 is the median, P10–P90 the 10th–90th percentile. "
+    "Built from the hub's implied heat rate × the Henry Hub gas forward, run "
+    "through a Monte Carlo simulation. Pick a hub and horizon in the sidebar, "
+    "then Run forecast."
 )
 
 if not paths.HUB_PRICES_PARQUET.exists():
@@ -98,15 +101,32 @@ st.plotly_chart(fig, use_container_width=True)
 
 # Key inputs
 col1, col2, col3 = st.columns(3)
-col1.metric("P50 (first month)", f"${df['p50'].iloc[0]:.2f}/MWh")
-col2.metric("P50 (avg over strip)", f"${df['p50'].mean():.2f}/MWh")
-col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:.2f}/MMBtu")
+col1.metric("P50 (first month)", f"${df['p50'].iloc[0]:,.2f}/MWh")
+col2.metric("P50 (avg over strip)", f"${df['p50'].mean():,.2f}/MWh")
+col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:,.2f}/MMBtu")
 
 st.subheader("Forecast table")
+st.caption(
+    "One row per forward month. P10–P90 are percentile power prices ($/MWh) "
+    "from the simulation. **History pts** is how many past heat-rate "
+    "observations shaped that month — when it's below 2 the month falls back "
+    "to a default heat rate, so treat those prices as rough until more price "
+    "history accumulates.")
+low_history = int((df["n_samples"] < 2).sum())
+if low_history:
+    st.warning(
+        f"⚠️ {low_history:,} of {len(df):,} months have fewer than 2 historical "
+        "heat-rate observations and use a default heat rate. The forecast will "
+        "sharpen as the hub price store builds up more months of history.")
 disp = df[["month", "gas_fwd", "p10", "p25", "p50", "p75", "p90", "n_samples"]].copy()
 disp["month"] = disp["month"].dt.strftime("%Y-%m")
 for col in ("gas_fwd", "p10", "p25", "p50", "p75", "p90"):
-    disp[col] = disp[col].map(lambda x: f"${x:.2f}")
+    disp[col] = disp[col].map(lambda x: f"${x:,.2f}")
+disp["n_samples"] = disp["n_samples"].map(lambda x: f"{x:,.0f}")
+disp = disp.rename(columns={
+    "month": "Month", "gas_fwd": "Gas fwd $/MMBtu",
+    "p10": "P10", "p25": "P25", "p50": "P50 (median)", "p75": "P75", "p90": "P90",
+    "n_samples": "History pts"})
 st.dataframe(disp, use_container_width=True, hide_index=True)
 
 st.caption(

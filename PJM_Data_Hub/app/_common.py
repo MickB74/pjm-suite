@@ -8,6 +8,112 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# Shared definition of PJM's LMP components. LMP ("Locational Marginal Price")
+# is the $/MWh price of energy at a specific location; it decomposes into three
+# additive parts. Reused by every screen with an LMP-component selector.
+LMP_COMPONENT_HELP = (
+    "PJM's Locational Marginal Price (LMP) is the price of power (\\$/MWh) at a "
+    "given location and hour. It's the sum of three parts:\n\n"
+    "- **total_lmp** — the all-in price that actually settles "
+    "(energy + congestion + loss).\n"
+    "- **energy** — the system-wide marginal cost of energy; identical "
+    "everywhere in PJM for that hour.\n"
+    "- **congestion** — the locational adder caused by transmission "
+    "constraints; the main reason two hubs differ in price (it drives *basis*). "
+    "Can be negative.\n"
+    "- **loss** — the cost of the electrical losses incurred delivering power "
+    "to that location."
+)
+
+
+# Datasets refreshed automatically when the app opens. Each entry is
+# (label, "module.path:function", requires_pjm_key). Updates are incremental,
+# so they're fast when the store is already current.
+_AUTO_REFRESH_TASKS = [
+    ("Hub prices", "datasets.hub_prices.pjm_api", "update", True),
+    ("Zone LMPs (monthly)", "datasets.zone_prices.pjm_zone_prices", "update", True),
+    ("Ancillary services", "datasets.ancillary.pjm_as", "update", True),
+    ("System load", "datasets.load.pjm_load", "update", True),
+    ("Weather (ERA5)", "datasets.weather.pjm_weather", "update", False),
+]
+
+
+# Skip auto-refresh if the data was already refreshed within this many hours.
+# Prevents a tab reload from re-pulling everything (and hitting PJM rate limits)
+# while still refreshing on a genuine "open the app in the morning" basis.
+_AUTO_REFRESH_MIN_INTERVAL_HOURS = 6
+
+
+def _auto_refresh_marker():
+    from pjm_core import paths
+    return paths.DATA / ".last_auto_refresh"
+
+
+def _hours_since_last_refresh() -> float | None:
+    marker = _auto_refresh_marker()
+    if not marker.exists():
+        return None
+    age_s = pd.Timestamp.now().timestamp() - marker.stat().st_mtime
+    return age_s / 3600.0
+
+
+def auto_refresh(st_obj, *, force: bool = False) -> None:
+    """Incrementally refresh all live datasets when the app opens.
+
+    Runs the first time a Streamlit session renders (i.e. when the app is
+    opened or the browser tab is reloaded), but skips if a refresh already
+    happened within the last few hours — so reloading the tab doesn't re-pull
+    everything and get rate-limited by PJM. Each dataset updates independently;
+    a failure in one is surfaced but never blocks the app or the others. Updates
+    are incremental, so when the store is already current this is quick.
+    """
+    import importlib
+
+    if not force and st_obj.session_state.get("_auto_refreshed"):
+        return
+    st_obj.session_state["_auto_refreshed"] = True
+
+    if not force:
+        hrs = _hours_since_last_refresh()
+        if hrs is not None and hrs < _AUTO_REFRESH_MIN_INTERVAL_HOURS:
+            return  # refreshed recently — nothing to do
+
+    from pjm_core import credentials
+
+    cfg = credentials.load_config()
+    have_pjm = credentials.have_credentials(cfg)
+
+    updated_any = False
+    with st_obj.status("🔄 Refreshing PJM data…", expanded=False) as status:
+        if not have_pjm:
+            status.write(
+                "⚠️ No PJM subscription key yet — set one on the **API Keys** page "
+                "to auto-refresh prices, ancillary, and load.")
+        for label, module_path, fn_name, needs_key in _AUTO_REFRESH_TASKS:
+            if needs_key and not have_pjm:
+                continue
+            try:
+                status.write(f"⏳ {label}…")
+                fn = getattr(importlib.import_module(module_path), fn_name)
+                result = fn()
+                rows = result.get("rows") if isinstance(result, dict) else None
+                status.write(f"✅ {label}" + (f" — {rows:,} rows" if rows is not None else " done"))
+                updated_any = True
+            except Exception as e:  # noqa: BLE001 — never let one dataset break app open
+                status.write(f"❌ {label}: {e}")
+        status.update(label="✅ Data up to date", state="complete")
+
+    # Stamp the marker so a tab reload within the interval skips the refresh.
+    try:
+        _auto_refresh_marker().touch()
+    except OSError:
+        pass
+
+    if updated_any:
+        # Screens cache their parquet loads with @st.cache_data; clear so they
+        # pick up the freshly written rows on this run.
+        st_obj.cache_data.clear()
+
 
 def data_status(st_obj, *, path: Path, rows: int, span: tuple) -> None:
     dmin, dmax = span

@@ -15,7 +15,7 @@ from pjm_core import paths
 
 PRICE_COLUMNS = [
     "datetime_beginning_ept", "datetime_ending_ept",
-    "pnode_name", "type",
+    "pnode_name", "type", "market",
     "total_lmp", "energy", "congestion", "loss",
     "source",
 ]
@@ -25,6 +25,7 @@ def load_hub_prices(
     hubs: list[str] | None = None,
     start=None,
     end_excl=None,
+    market: str | None = "RT",
 ) -> pd.DataFrame:
     """Load PJM hub LMPs from the local parquet store.
 
@@ -32,6 +33,7 @@ def load_hub_prices(
         hubs: filter to these pnode_name values; None = all hubs.
         start: inclusive lower bound on datetime_beginning_ept.
         end_excl: exclusive upper bound on datetime_beginning_ept.
+        market: "RT" or "DA" (None = both markets).
 
     Returns a DataFrame with columns matching PRICE_COLUMNS (source added).
     """
@@ -44,6 +46,13 @@ def load_hub_prices(
 
     df["datetime_beginning_ept"] = pd.to_datetime(df["datetime_beginning_ept"])
     df["datetime_ending_ept"] = pd.to_datetime(df["datetime_ending_ept"])
+
+    # Stores written before DA support have no market column: all rows are RT.
+    if "market" not in df.columns:
+        df = df.copy()
+        df["market"] = "RT"
+    if market:
+        df = df[df["market"] == market]
 
     if hubs:
         df = df[df["pnode_name"].isin(hubs)]

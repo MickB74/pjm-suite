@@ -2,8 +2,8 @@
 """PJM Data Hub CLI orchestrator.
 
 Usage:
-    python orchestrate.py update hub_prices           # update DOM Hub LMPs
-    python orchestrate.py update hub_prices --all-hubs # update all PJM hubs
+    python orchestrate.py update hub_prices           # all hubs, RT + DA LMPs
+    python orchestrate.py update hub_prices --primary-only  # DOMINION HUB only
     python orchestrate.py update system_gen           # PJM fuel mix (gridstatus)
     python orchestrate.py update eia923               # EIA-923 for PJM plants
     python orchestrate.py update all                  # all datasets
