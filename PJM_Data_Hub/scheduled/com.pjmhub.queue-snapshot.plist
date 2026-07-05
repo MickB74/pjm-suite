@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pjmhub.queue-snapshot</string>
+
+    <!-- Run the PJM interconnection-queue snapshot once a day. PJM only serves
+         the current queue state, so this archives a dated snapshot each day to
+         build the change-over-time history even when the app isn't opened. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub/.venv/bin/python</string>
+        <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub/orchestrate.py</string>
+        <string>update</string>
+        <string>queue</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub</string>
+
+    <!-- 06:30 local time every day. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub/logs/queue_snapshot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub/logs/queue_snapshot.log</string>
+</dict>
+</plist>

@@ -105,6 +105,28 @@ col1.metric("P50 (first month)", f"${df['p50'].iloc[0]:,.2f}/MWh")
 col2.metric("P50 (avg over strip)", f"${df['p50'].mean():,.2f}/MWh")
 col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:,.2f}/MMBtu")
 
+gas_source = df["gas_source"].iloc[0] if "gas_source" in df.columns else "unknown"
+if gas_source.startswith("NYMEX strip (cached"):
+    _source_note = ("Real traded Henry Hub strip pulled from Yahoo at launch and "
+                    "cached to CSV; months past the liquid strip mean-revert to $4.")
+else:
+    _source_note = {
+    "NYMEX strip (Yahoo Finance, unofficial/delayed)":
+        "Real traded Henry Hub futures strip from Yahoo Finance (CME-derived, "
+        "unofficial & delayed); months past the liquid strip mean-revert to $4.",
+    "EIA STEO Henry Hub forecast":
+        "Real forward curve from EIA's Short-Term Energy Outlook (official gas "
+        "price forecast); months beyond STEO's horizon mean-revert to $4.",
+    "EIA Henry Hub spot + mean-reversion":
+        "STEO unavailable — last EIA Henry Hub spot print extrapolated forward "
+        "with mean-reversion to $4. Treat as a rough estimate, not a traded strip.",
+    "mean-reversion fallback ($4 anchor)":
+        "No EIA data (add your EIA key on the API Keys screen) — flat $4 anchor.",
+    "manual CSV override":
+        "Using your manual gas-price CSV override.",
+}.get(gas_source, "")
+st.caption(f"⛽ **Gas curve source:** {gas_source}. {_source_note}")
+
 st.subheader("Forecast table")
 st.caption(
     "One row per forward month. P10–P90 are percentile power prices ($/MWh) "
@@ -132,5 +154,6 @@ st.dataframe(disp, use_container_width=True, hide_index=True)
 st.caption(
     "**Methodology:** P50 power price = gas forward × median implied heat rate (historical LMP ÷ HH gas). "
     "Monte Carlo: lognormal gas (σ = 0.5·√t annualised) × lognormal heat rate (σ from realized distribution). "
-    "Price capped at $2,000/MWh. Gas mean-reverts to $4.00/MMBtu over 24 months beyond the EIA strip."
+    "Price capped at $2,000/MWh. Gas forward comes from EIA STEO's Henry Hub forecast where available, "
+    "then mean-reverts to $4.00/MMBtu over 24 months beyond STEO's horizon."
 )

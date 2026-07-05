@@ -17,6 +17,13 @@ if [ -n "$STUCK_PIDS" ]; then
     sleep 1
 fi
 
+# Refresh the NYMEX Henry Hub gas strip from Yahoo (this runs on your machine's
+# residential IP, so Yahoo is reachable here even though a cloud host it isn't).
+# Best-effort and never blocks launch; the app reads the cached CSV it writes.
+echo "Refreshing NYMEX gas strip …"
+( cd PJM_Data_Hub && .venv/bin/python -m pjm_core.gas_strip ) \
+    || echo "  (gas strip refresh skipped — app will fall back to EIA STEO)"
+
 # Open browser after a short delay so Streamlit has time to start
 (sleep 3 && open "http://localhost:$PORT") &
 

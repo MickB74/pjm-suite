@@ -37,6 +37,8 @@ LOAD_DIR = DATA / "load"
 CAPACITY_DIR = DATA / "capacity"
 DELIVERY_DIR = DATA / "delivery_rates"
 WEATHER_DIR = DATA / "weather"
+QUEUE_DIR = DATA / "queue"
+GAS_DIR = DATA / "gas"
 CSV_EXPORTS_DIR = DATA / "csv_exports"
 LOGS_DIR = ROOT / "logs"
 
@@ -80,11 +82,24 @@ WEATHER_PARQUET = WEATHER_DIR / "pjm_weather_hourly.parquet"
 WEATHER_CSV = WEATHER_DIR / "pjm_weather_hourly.csv"
 WEATHER_STATE = WEATHER_DIR / ".last_update.json"
 
+# Interconnection (New Services) queue — full snapshot of every project, pulled
+# from PJM's public Planning API (no Data Miner subscription key needed).
+QUEUE_PARQUET = QUEUE_DIR / "pjm_queue.parquet"
+QUEUE_CSV = QUEUE_DIR / "pjm_queue.csv"
+QUEUE_STATE = QUEUE_DIR / ".last_update.json"
+
+# Henry Hub gas forward curve for the price forecast.
+#   GAS_STRIP_CSV   — auto-pulled NYMEX strip, refreshed at launch (see gas_strip.py)
+#   GAS_OVERRIDE_CSV — truly manual override; if present it wins over everything
+GAS_STRIP_CSV = GAS_DIR / "henry_hub_nymex_strip.csv"
+GAS_OVERRIDE_CSV = GAS_DIR / "gas_price_override.csv"
+GAS_STRIP_STATE = GAS_DIR / ".last_update.json"
+
 _ALL_DIRS = [
     DATA, HUB_PRICES_DIR, ZONE_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
     EIA860_DIR, EIA860_RAW_DIR,
     PRICE_FORECAST_DIR, ANCILLARY_DIR, LOAD_DIR, CAPACITY_DIR, WEATHER_DIR,
-    DELIVERY_DIR, DELIVERY_URDB_RAW_DIR,
+    DELIVERY_DIR, DELIVERY_URDB_RAW_DIR, QUEUE_DIR, GAS_DIR,
     CSV_EXPORTS_DIR, LOGS_DIR,
 ]
 
@@ -102,4 +117,5 @@ DATASETS = {
     "ancillary": "PJM ancillary services (reserve + regulation MCP)",
     "load": "PJM hourly metered load by zone",
     "eia923": "EIA-923 plant monthly generation & fuel",
+    "queue": "PJM interconnection (New Services) queue",
 }

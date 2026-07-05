@@ -82,6 +82,12 @@ def _update_eia860(years=None, **_) -> None:
     update(years=years, log=print)
 
 
+def _update_queue(**_) -> None:
+    from datasets.queue.pjm_queue import update
+    print("Updating interconnection queue (daily snapshot) …")
+    update()
+
+
 # Registry: dataset name → updater. Order defines the sequence for `update all`.
 UPDATERS = {
     "hub_prices": _update_hub_prices,
@@ -92,6 +98,7 @@ UPDATERS = {
     "weather": _update_weather,
     "eia923": _update_eia923,
     "eia860": _update_eia860,
+    "queue": _update_queue,
 }
 
 
@@ -102,6 +109,7 @@ _STATE_DATASETS = [
     ("load", paths.LOAD_STATE),
     ("ancillary", paths.ANCILLARY_STATE),
     ("weather", paths.WEATHER_STATE),
+    ("queue", paths.QUEUE_STATE),
 ]
 
 # Year-partitioned datasets: one parquet per year, no state file.

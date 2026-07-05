@@ -39,6 +39,7 @@ nav = st.navigation({
         st.Page(f"{P}/12_System_Load.py", title="System Load", icon="📈"),
         st.Page(f"{P}/9_Ancillary_Services.py", title="Ancillary Services", icon="🛡️"),
         st.Page(f"{P}/11_Capacity_RPM.py", title="Capacity (RPM)", icon="🏛️"),
+        st.Page(f"{P}/19_Interconnection_Queue.py", title="Interconnection Queue", icon="🔌"),
         st.Page(f"{P}/3_EIA_923.py", title="EIA-923 Generation", icon="📅"),
     ],
     "Analyze": [

@@ -177,7 +177,15 @@ with c_right:
     show = bill.copy()
     show["¢/kWh"] = (show["Amount ($)"] / kwh * 100).round(3) if kwh else None
     show["Amount ($)"] = show["Amount ($)"].round(0)
-    st.dataframe(show, use_container_width=True, hide_index=True)
+    st.dataframe(
+        show,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Amount ($)": st.column_config.NumberColumn(format="$%,.0f"),
+            "¢/kWh": st.column_config.NumberColumn(format="%.3f ¢"),
+        },
+    )
     st.caption(f"Capacity: {lda} @ "
                f"${cap_price:,.2f}/MW-day × {plc_mw:.3f} MW × {days} days"
                if cap_price is not None else "Capacity price unavailable.")

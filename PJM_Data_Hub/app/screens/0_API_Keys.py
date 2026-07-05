@@ -16,6 +16,7 @@ from datasets.zone_prices import pjm_zone_prices
 from datasets.ancillary import pjm_as
 from datasets.load import pjm_load
 from datasets.weather import pjm_weather
+from datasets.queue import pjm_queue
 
 st.title("🔑 API Keys & Control Tower")
 
@@ -118,3 +119,12 @@ st.caption(f"🌡️ **Weather (ERA5)** — {wx_sum.get('rows', 0):,} rows · "
            "used by 5CP & Peak Day Analysis.")
 if st.button("Update Weather (ERA5)"):
     _run_update(pjm_weather.update, "Weather (ERA5)")
+
+# --- Interconnection queue (PJM public Planning API — no key needed) ---------
+q_sum = pjm_queue.store_summary()
+st.caption(f"🔌 **Interconnection Queue** — {q_sum.get('active', 0):,} active "
+           f"({q_sum.get('active_mw', 0):,.0f} MW) as of {q_sum.get('snapshot', '—')} · "
+           f"{q_sum.get('snapshots', 0)} archived snapshot(s) · free, no key (PJM "
+           "Planning API). Each refresh is archived to track queue changes over time.")
+if st.button("Update Interconnection Queue"):
+    _run_update(pjm_queue.update, "Interconnection queue")

@@ -6,3 +6,4 @@ gridstatus
 streamlit
 plotly
 numpy
+yfinance

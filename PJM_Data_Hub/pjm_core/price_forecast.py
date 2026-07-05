@@ -67,6 +67,39 @@ def _gas_from_eia(api_key: str | None = None) -> pd.Series:
         return pd.Series(dtype=float)
 
 
+def _gas_from_steo(api_key: str | None = None) -> pd.Series:
+    """Henry Hub natural gas price ($/MMBtu) from EIA's Short-Term Energy Outlook
+    (STEO). Unlike the spot series, STEO carries EIA's official *forecast* months
+    (~18–24 months forward), giving a real forward curve rather than an
+    extrapolation. Returns a monthly series indexed by first-of-month, or an
+    empty Series on failure."""
+    key = api_key or ""
+    if not key:
+        return pd.Series(dtype=float)
+    try:
+        import requests
+        url = "https://api.eia.gov/v2/steo/data/"
+        params = {
+            "api_key": key,
+            "frequency": "monthly",
+            "data[0]": "value",
+            "facets[seriesId][]": "NGHHUUS",  # Henry Hub spot price, $/MMBtu
+            "sort[0][column]": "period",
+            "sort[0][direction]": "asc",
+            "length": 300,
+        }
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+        rows = r.json()["response"]["data"]
+        s = pd.Series(
+            {pd.Timestamp(row["period"]): float(row["value"]) for row in rows
+             if row.get("value") is not None}
+        ).sort_index()
+        return s
+    except Exception:
+        return pd.Series(dtype=float)
+
+
 def _gas_forward_curve(
     gas_history: pd.Series,
     horizon_months: int,
@@ -81,22 +114,135 @@ def _gas_forward_curve(
     return pd.Series(fwd, index=months)
 
 
+def _extend_to_horizon(
+    partial: pd.Series,
+    horizon_months: int,
+    asof: pd.Timestamp,
+) -> pd.Series:
+    """Extend a partial monthly curve (STEO forecast, Yahoo strip, …) across the
+    full horizon: use the source's values where available, then mean-revert to
+    $4 for any months beyond the source's last month."""
+    months = pd.date_range(asof, periods=horizon_months + 2, freq="MS")
+    last_month = partial.index.max()
+    last_val = float(partial.loc[last_month])
+    alpha = np.exp(-1 / REVERSION_MONTHS)
+    out = {}
+    for m in months:
+        if m in partial.index:
+            out[m] = float(partial.loc[m])
+        else:
+            k = max((m.year - last_month.year) * 12 + (m.month - last_month.month), 0)
+            out[m] = LONG_RUN_GAS + (last_val - LONG_RUN_GAS) * (alpha ** k)
+    return pd.Series(out)
+
+
+_YF_MONTH_CODE = {1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M",
+                  7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z"}
+
+
+def _gas_from_yahoo(horizon_months: int, asof: pd.Timestamp) -> pd.Series:
+    """Best-effort *real* NYMEX Henry Hub strip from Yahoo Finance monthly
+    contracts (ticker ``NG<monthcode><yy>.NYM``, e.g. ``NGQ26.NYM`` = Aug-2026).
+
+    Yahoo's quotes are CME-derived but **unofficial and delayed**, and Yahoo
+    rate-limits/blocks aggressively — so this returns whatever contract months
+    resolve, or an empty Series on any failure. Deferred contracts are illiquid
+    and often missing; callers should fall back when too few months come back."""
+    try:
+        import logging
+        import yfinance as yf
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # hush blocked-fetch spam
+    except Exception:
+        return pd.Series(dtype=float)
+    n = min(horizon_months, 24)  # deferred NG contracts get too thin past ~2y
+    start = asof.to_period("M").to_timestamp()
+    months = pd.date_range(start, periods=n, freq="MS")
+    tk_map = {f"NG{_YF_MONTH_CODE[m.month]}{str(m.year)[2:]}.NYM": m for m in months}
+    try:
+        data = yf.download(list(tk_map), period="7d", progress=False, threads=True)
+    except Exception:
+        return pd.Series(dtype=float)
+    if data is None or len(data) == 0:
+        return pd.Series(dtype=float)
+    close = data["Close"] if "Close" in getattr(data, "columns", []) else data
+    out = {}
+    for tk, m in tk_map.items():
+        try:
+            if hasattr(close, "columns") and tk in close.columns:
+                col = close[tk]
+            elif len(tk_map) == 1:
+                col = close
+            else:
+                continue
+            vals = col.dropna()
+            if len(vals):
+                out[m] = float(vals.iloc[-1])
+        except Exception:
+            continue
+    return pd.Series(out).sort_index()
+
+
+def _gas_strip_asof() -> str:
+    """`, YYYY-MM-DD` date the cached strip was pulled, or '' if unknown."""
+    try:
+        import json
+        state = json.loads(paths.GAS_STRIP_STATE.read_text())
+        return f", {state['asof']}"
+    except Exception:
+        return ""
+
+
 def _gas_curve(
     api_key: str | None,
     horizon_months: int,
     asof: pd.Timestamp,
     csv_override: Path | None = None,
-) -> pd.Series:
-    """Gas forward curve: manual CSV → EIA → seasonal mean-reversion fallback."""
+) -> tuple[pd.Series, str]:
+    """Gas forward curve and the source label describing where it came from.
+
+    Priority: explicit override → manual override CSV → cached NYMEX strip
+    (refreshed at launch) → live NYMEX strip (Yahoo) → EIA STEO forecast →
+    EIA spot + mean-reversion → flat $4 anchor. Returns (series, source_label)."""
+    # 1. Explicit override passed by the caller (used in tests).
     if csv_override and csv_override.exists():
         df = pd.read_csv(csv_override, parse_dates=["month"])
-        return df.set_index("month")["gas_price"]
+        return df.set_index("month")["gas_price"], "manual CSV override"
+
+    # 2. Truly-manual override file on disk — wins over everything auto.
+    if paths.GAS_OVERRIDE_CSV.exists():
+        df = pd.read_csv(paths.GAS_OVERRIDE_CSV, parse_dates=["month"])
+        return df.set_index("month")["gas_price"], "manual CSV override"
+
+    # 3. Cached NYMEX strip written at launch by gas_strip.update() — this is the
+    #    real traded strip pulled from a residential IP, so it works even when
+    #    the app itself (e.g. a cloud host) can't reach Yahoo directly.
+    if paths.GAS_STRIP_CSV.exists():
+        df = pd.read_csv(paths.GAS_STRIP_CSV, parse_dates=["month"])
+        strip = df.set_index("month")["gas_price"]
+        if len(strip) >= 3:
+            asof_label = _gas_strip_asof()
+            return (_extend_to_horizon(strip, horizon_months, asof),
+                    f"NYMEX strip (cached at launch{asof_label})")
+
+    # 4. Best-effort live pull: the real traded NYMEX strip via Yahoo. Unofficial
+    #    /flaky, so only trust it when enough contract months resolve.
+    yahoo = _gas_from_yahoo(horizon_months, asof)
+    if len(yahoo) >= 3:
+        return (_extend_to_horizon(yahoo, horizon_months, asof),
+                "NYMEX strip (Yahoo Finance, unofficial/delayed)")
+
+    # Licensed auto-source: EIA STEO carries real forward (forecast) months.
+    steo = _gas_from_steo(api_key)
+    if not steo.empty:
+        return _extend_to_horizon(steo, horizon_months, asof), "EIA STEO Henry Hub forecast"
+
+    # Fallback: extrapolate the last EIA spot print with mean reversion to $4.
     history = _gas_from_eia(api_key)
     fwd = _gas_forward_curve(history, horizon_months, asof)
     if not history.empty:
-        # Patch forward months already in history with actual values
-        fwd.update(history)
-    return fwd
+        fwd.update(history)  # patch forward months already in history
+        return fwd, "EIA Henry Hub spot + mean-reversion"
+    return fwd, "mean-reversion fallback ($4 anchor)"
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +314,7 @@ def run(
     rng = np.random.default_rng(seed)
 
     gas_history = _gas_from_eia(eia_api_key)
-    gas_fwd = _gas_curve(eia_api_key, horizon_months, asof)
+    gas_fwd, gas_source = _gas_curve(eia_api_key, horizon_months, asof)
     monthly_lmp = _load_dom_hub_monthly(hub)
     hr_dist = _build_heat_rate_distribution(monthly_lmp, gas_history)
 
@@ -209,7 +355,9 @@ def run(
             "gas_fwd": gas_f,
         })
 
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    out["gas_source"] = gas_source
+    return out
 
 
 # ---------------------------------------------------------------------------

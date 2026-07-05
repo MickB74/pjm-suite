@@ -35,6 +35,7 @@ _AUTO_REFRESH_TASKS = [
     ("Ancillary services", "datasets.ancillary.pjm_as", "update", True),
     ("System load", "datasets.load.pjm_load", "update", True),
     ("Weather (ERA5)", "datasets.weather.pjm_weather", "update", False),
+    ("Interconnection queue", "datasets.queue.pjm_queue", "update", False),
 ]
 
 
