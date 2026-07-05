@@ -115,10 +115,13 @@ def _api_key(cfg: dict | None = None) -> str:
 
 def _fetch_window(api_key: str, start: date, end: date, log=print) -> pd.DataFrame:
     """Fetch all reserve_market_results rows for [start, end] inclusive."""
+    # End the range at the same day 23:59 (captures that day's last hour)
+    # rather than spilling to the next day 00:00. Spilling across a boundary in
+    # PJM's data store — a calendar-year edge or the archived↔current split —
+    # makes the archive reject the whole request with a 400.
     dt_range = (
         f"{start.strftime('%m/%d/%Y')} 00:00"
-        f"to"
-        f"{(end + timedelta(days=1)).strftime('%m/%d/%Y')} 00:00"
+        f"to{end.strftime('%m/%d/%Y')} 23:59"
     )
     headers = {"Ocp-Apim-Subscription-Key": api_key}
     rows: list[dict] = []
@@ -161,6 +164,29 @@ def _fetch_window(api_key: str, start: date, end: date, log=print) -> pd.DataFra
     return df[keep].dropna(subset=["datetime_beginning_ept", "service"])
 
 
+def _fetch_window_bisect(key: str, start: date, end: date, log=print) -> pd.DataFrame:
+    """Fetch [start, end], bisecting the range on a 400 error.
+
+    PJM returns 400 for a range that crosses a boundary in its data store — the
+    calendar-year edge, or the archived↔current split (a moving ~2-year-old
+    date). Splitting and retrying isolates the offending boundary to at most a
+    single day, so everything on either side is still captured.
+    """
+    try:
+        return _fetch_window(key, start, end, log=log)
+    except Exception as e:
+        if start >= end:
+            log(f"      day {start} failed, skipping: {e}")
+            return pd.DataFrame()
+        mid = start + (end - start) // 2
+        log(f"      400 on {start}→{end}; splitting at {mid}")
+        left = _fetch_window_bisect(key, start, mid, log=log)
+        time.sleep(1.0)
+        right = _fetch_window_bisect(key, mid + timedelta(days=1), end, log=log)
+        parts = [f for f in (left, right) if not f.empty]
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
 def fetch(cfg: dict, start: date, end: date, log=print) -> pd.DataFrame:
     """Fetch ancillary market results for [start, end] inclusive, in date chunks."""
     key = _api_key(cfg)
@@ -168,9 +194,15 @@ def fetch(cfg: dict, start: date, end: date, log=print) -> pd.DataFrame:
     chunk_start = start
     while chunk_start <= end:
         chunk_end = min(chunk_start + timedelta(days=DATE_CHUNK_DAYS - 1), end)
+        # PJM's archived data store rejects a range that crosses a calendar-year
+        # boundary (400), so never let a chunk span Dec 31 → Jan 1. The
+        # archived↔current boundary is handled by bisect-on-failure below.
+        year_end = date(chunk_start.year, 12, 31)
+        if chunk_end > year_end:
+            chunk_end = year_end
         log(f"    {chunk_start} → {chunk_end} …")
         try:
-            df = _fetch_window(key, chunk_start, chunk_end, log=log)
+            df = _fetch_window_bisect(key, chunk_start, chunk_end, log=log)
             if not df.empty:
                 frames.append(df)
                 log(f"      {len(df):,} rows")

@@ -1,6 +1,6 @@
 # PJM Suite
 
-A PJM-footprint equivalent of the ercot-suite, focused on **PJM DOM Hub** (Dominion Hub, Virginia). Pulls hourly Real-Time **and Day-Ahead** LMPs for **all 12 PJM trading hubs**, PJM system generation by fuel, and EIA-923 plant data; runs a Monte Carlo forward price forecast; validates invoices against published LMPs; and hosts everything in a Streamlit Data Hub.
+A PJM-footprint equivalent of the ercot-suite, focused on the **Dominion Hub** (Virginia / North Carolina) but covering all 12 PJM trading hubs. It pulls hourly Real-Time **and Day-Ahead** LMPs, PJM system generation by fuel, system load by zone, ancillary-services clearing prices, weather at the major load centers, and plant-level data from EIA Forms 860/923. On top of that lake it runs a Monte Carlo forward price forecast, a 5CP peak predictor and PLC calculator, plant-earnings and capacity-market analytics, invoice validation, and DART/basis/capture-price tools — all hosted in a Streamlit Data Hub with 18 screens.
 
 ---
 
@@ -27,16 +27,26 @@ Or skip the data pull and just build the environment:
 
 ---
 
-## Projects / Modules
+## Layout
 
 | Folder | What it does |
 |---|---|
 | `PJM_Data_Hub/` | Shared engine (`pjm_core`), data lake, Streamlit app, CLI orchestrator |
-| `PJM_Data_Hub/pjm_core/` | Timezone (Eastern), paths, credentials, prices, settlement math, price forecast |
-| `PJM_Data_Hub/datasets/hub_prices/` | Hourly RT + DA LMP ETL for all 12 PJM hubs (`pjm_api.py`) |
+| `PJM_Data_Hub/pjm_core/` | Engine: timezone, paths, credentials, prices, settlement, invoice, price forecast, peak/5CP, capacity (RPM), plant earnings, plant→zone mapping, hub & weather reference points |
+| `PJM_Data_Hub/datasets/hub_prices/` | Hourly RT + DA LMP ETL for all 12 PJM hubs (`pjm_api.py`, via gridstatus) |
+| `PJM_Data_Hub/datasets/zone_prices/` | Monthly average zone LMPs (for valuing monthly plant generation) |
 | `PJM_Data_Hub/datasets/system_gen_by_fuel/` | PJM fuel mix via gridstatus (hourly, EIA-930) |
-| `PJM_Data_Hub/datasets/eia923/` | EIA Form 923 plant-level generation for PJM states |
-| `PJM_Data_Hub/app/` | Streamlit Hub: Hub Prices, System Generation, EIA-923, Price Forecast, Invoice Validation |
+| `PJM_Data_Hub/datasets/load/` | Hourly metered system load by zone (`hrl_load_metered`, direct PJM API) |
+| `PJM_Data_Hub/datasets/ancillary/` | Reserve + regulation market clearing prices (`reserve_market_results`) |
+| `PJM_Data_Hub/datasets/weather/` | Hourly ERA5 weather at major load centers (Open-Meteo) |
+| `PJM_Data_Hub/datasets/eia923/` | EIA Form 923 plant-level monthly net generation for PJM states |
+| `PJM_Data_Hub/datasets/eia860/` | EIA Form 860 plant nameplate / summer capacity (MW) |
+| `PJM_Data_Hub/app/` | Streamlit Hub (`Home.py` + `screens/`) — see below |
+| `PJM_Data_Hub/scripts/` | `peak_digest.py` — morning 5CP peak-risk briefing |
+
+### App screens (`app/screens/`)
+
+API Keys & Control Tower · Hub Prices · System Generation · EIA-923 · Price Forecast · Invoice Validation · DA–RT Spread (DART) · Capture Price · Hub Basis · Ancillary Services · Peak Day Analysis · Capacity Market (RPM) · System Load · Markets Explained · 5 Coincident Peaks (5CP) & Weather · Plant Earnings · 5CP Peak Predictor · PLC & Capacity-Cost Calculator
 
 ---
 
@@ -44,10 +54,15 @@ Or skip the data pull and just build the environment:
 
 | Source | What | API | Lag |
 |---|---|---|---|
-| **PJM RT LMPs** | Hourly RT LMPs at all 12 trading hubs | PJM Data Miner 2 (`api.pjm.com`) | ~1 day |
-| **PJM DA LMPs** | Hourly Day-Ahead LMPs at all 12 trading hubs | PJM Data Miner 2 (`api.pjm.com`) | same day |
+| **PJM RT LMPs** | Hourly RT LMPs at all 12 trading hubs | PJM Data Miner 2 (via gridstatus) | ~1 day |
+| **PJM DA LMPs** | Hourly Day-Ahead LMPs at all 12 trading hubs | PJM Data Miner 2 (via gridstatus) | same day |
+| **PJM Zone LMPs** | Monthly average LMP per zone × market | PJM Data Miner 2 (via gridstatus) | ~1 day |
+| **PJM System Load** | Hourly metered load by zone | PJM Data Miner 2 (`api.pjm.com`) | ~1 day |
+| **PJM Ancillary** | Hourly reserve + regulation clearing prices | PJM Data Miner 2 (`api.pjm.com`) | ~1 day |
 | **PJM Fuel Mix** | Hourly generation by fuel (system-wide) | gridstatus → EIA-930 | ~2 days |
+| **Weather** | Hourly ERA5 at major load centers | Open-Meteo (no key) | ~5 days |
 | **EIA Form 923** | Monthly plant net generation & fuel | EIA file download | ~6 months |
+| **EIA Form 860** | Plant nameplate / summer capacity (MW) | EIA file download | annual |
 
 ---
 
@@ -74,9 +89,16 @@ Each hourly LMP has three components:
 data/
   hub_prices/     pjm_hub_prices_hourly.parquet, .last_update.json
                   (one row per hub × hour × market; market ∈ {RT, DA})
+  zone_prices/    monthly average LMP per zone × market
   system_gen/     pjm_gen_by_fuel_<year>.parquet
+  load/           hourly metered load by zone
+  ancillary/      hourly reserve + regulation clearing prices
+  weather/        hourly ERA5 at major load centers
   eia923/         eia923_pjm_<year>.parquet, raw/ (cached ZIPs)
-  price_forecast/ pjm_forecast_DOM_HUB_<date>.parquet
+  eia860/         plant nameplate / summer capacity (MW)
+  capacity/       RPM auction clearing prices by LDA
+  price_forecast/ pjm_forecast_<hub>_<date>.parquet
+  csv_exports/    Excel-friendly CSV mirrors
 ```
 
 ---
@@ -95,6 +117,32 @@ Mirrors the ERCOT heat-rate × gas approach:
 5. Output: monthly P10/P25/P50/P75/P90.
 
 Gas mean-reverts to **$4.00/MMBtu** with a **24-month** e-folding time beyond the EIA strip.
+
+---
+
+## Peak / 5CP & capacity analytics
+
+PJM sets each load's **Peak Load Contribution (PLC)** from its demand during the
+**five highest RTO peak-load hours of the summer** — the "5 Coincident Peaks"
+(5CP). Those hours land on the hottest, most humid summer afternoons, so peak
+risk is largely a weather signal.
+
+- `pjm_core/peak.py` — shared 5CP analytics used by the **Peak Day Analysis**,
+  **5CP & Weather**, and **5CP Peak Predictor** screens and by `peak_digest.py`,
+  so the app, the predictor, and the morning briefing all agree.
+- `pjm_core/weather_points.py` — major load centers with population weights to
+  turn point ERA5 weather into a system-level peak-load proxy.
+- `pjm_core/capacity.py` — RPM Base Residual Auction clearing prices ($/MW-day)
+  by Locational Deliverability Area (RTO + constrained sub-zones like DOM,
+  EMAAC), powering the **Capacity Market (RPM)** and **PLC Calculator** screens.
+
+## Plant earnings
+
+There is no public record of what a PJM plant actually earns. `pjm_core/plant_earnings.py`
+reconstructs a defensible **estimate** of energy revenue as EIA-923 monthly MWh
+× the zonal LMP for that month, mapping each plant to its PJM zone via
+`pjm_core/plant_zones.py` (EIA reports state, not zone) and pulling capacity (MW)
+from EIA-860 for capacity-revenue estimates.
 
 ---
 
@@ -131,17 +179,39 @@ hubs, interval by interval:
 
 ## CLI
 
+The orchestrator drives every dataset:
+
 ```bash
 cd PJM_Data_Hub
 .venv/bin/python orchestrate.py update hub_prices                 # all hubs, RT + DA
-.venv/bin/python orchestrate.py update hub_prices --primary-only  # DOM HUB only
+.venv/bin/python orchestrate.py update hub_prices --primary-only  # DOMINION HUB only
+.venv/bin/python orchestrate.py update zone_prices                # monthly avg LMP per zone
 .venv/bin/python orchestrate.py update system_gen
+.venv/bin/python orchestrate.py update load                       # hourly metered load by zone
+.venv/bin/python orchestrate.py update ancillary                  # reserve + regulation prices
+.venv/bin/python orchestrate.py update weather                    # ERA5 at load centers
 .venv/bin/python orchestrate.py update eia923
-.venv/bin/python orchestrate.py update all
-.venv/bin/python orchestrate.py status
+.venv/bin/python orchestrate.py update eia860
+.venv/bin/python orchestrate.py update all                        # every dataset (continues on error)
+.venv/bin/python orchestrate.py status                            # rows, date range & freshness, all datasets
+.venv/bin/python orchestrate.py status --json                     # same, machine-readable
 
-# dataset-level CLI (finer control)
+# --years limits the annual datasets (system_gen, eia923, eia860)
+.venv/bin/python orchestrate.py update eia923 --years 2024 2025
+```
+
+Each dataset also has its own module CLI for finer control (e.g. one market only):
+
+```bash
 .venv/bin/python datasets/hub_prices/pjm_api.py update --markets RT   # RT only
+```
+
+Morning 5CP peak-risk briefing (pipe into email/Slack):
+
+```bash
+.venv/bin/python scripts/peak_digest.py            # today's digest
+.venv/bin/python scripts/peak_digest.py --days 10  # shorter horizon
+.venv/bin/python scripts/peak_digest.py --refresh  # update load + weather first
 ```
 
 ---

@@ -125,13 +125,20 @@ def _fetch_direct(api_key: str, start: date, end: date,
     cong_col = "congestion_price_rt" if market == "RT" else "congestion_price_da"
     loss_col = "marginal_loss_price_rt" if market == "RT" else "marginal_loss_price_da"
 
+    # End the range at the same day 23:59 (captures that day's 23:00 hour)
+    # rather than spilling to the next day 00:00. Spilling across a boundary in
+    # PJM's data store — a calendar-year edge or the archived↔current split —
+    # makes the archive reject the whole request with a 400.
     dt_range = (
         f"{start.strftime('%m/%d/%Y')} 00:00"
-        f"to"
-        f"{(end + timedelta(days=1)).strftime('%m/%d/%Y')} 00:00"
+        f"to{end.strftime('%m/%d/%Y')} 23:59"
     )
+    # Filter by type=HUB rather than pnode_id: PJM archives LMP data older than
+    # ~2 years, and the archived feed rejects pnode_id / pnode_name filters
+    # (400 Bad Request). type=HUB is accepted for both current and archived
+    # data and returns exactly the trading-hub aggregates (our 12 hubs).
     params = {
-        "pnode_id": _PNODE_ID_STR,
+        "type": "HUB",
         "row_is_current": "TRUE",
         "datetime_beginning_ept": dt_range,
     }
@@ -207,6 +214,30 @@ def test_auth(cfg: dict | None = None, log=print) -> bool:
 # Fetch + normalise
 # ---------------------------------------------------------------------------
 
+def _fetch_direct_bisect(key: str, start: date, end: date,
+                         market: str, log=print) -> pd.DataFrame:
+    """Fetch [start, end], bisecting the range on a 400 error.
+
+    PJM returns 400 for a range that crosses a boundary in its data store — the
+    calendar-year edge, or the archived↔current split (a moving ~2-year-old
+    date). Splitting and retrying isolates the offending boundary to at most a
+    single day, so everything on either side is still captured.
+    """
+    try:
+        return _fetch_direct(key, start, end, market=market, log=log)
+    except Exception as e:
+        if start >= end:
+            log(f"      day {start} failed, skipping: {e}")
+            return pd.DataFrame()
+        mid = start + (end - start) // 2
+        log(f"      400 on {start}→{end}; splitting at {mid}")
+        left = _fetch_direct_bisect(key, start, mid, market, log)
+        time.sleep(1.0)
+        right = _fetch_direct_bisect(key, mid + timedelta(days=1), end, market, log)
+        parts = [f for f in (left, right) if not f.empty]
+        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
 def fetch_hub_lmps(cfg: dict, start: date, end: date, log=print,
                    market: str = "RT") -> pd.DataFrame:
     """Fetch hourly hub LMPs for [start, end] inclusive (all PJM hubs).
@@ -219,9 +250,15 @@ def fetch_hub_lmps(cfg: dict, start: date, end: date, log=print,
     chunk_start = start
     while chunk_start <= end:
         chunk_end = min(chunk_start + timedelta(days=DATE_CHUNK_DAYS - 1), end)
+        # PJM's archived data store rejects a range that crosses a calendar-year
+        # boundary (400), so never let a chunk span Dec 31 → Jan 1. The
+        # archived↔current boundary is handled by bisect-on-failure below.
+        year_end = date(chunk_start.year, 12, 31)
+        if chunk_end > year_end:
+            chunk_end = year_end
         log(f"    {chunk_start} → {chunk_end} …")
         try:
-            df = _fetch_direct(key, chunk_start, chunk_end, market=market, log=log)
+            df = _fetch_direct_bisect(key, chunk_start, chunk_end, market, log=log)
             if not df.empty:
                 frames.append(df)
                 log(f"      {len(df):,} rows")
