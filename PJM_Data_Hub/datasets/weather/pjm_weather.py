@@ -372,6 +372,84 @@ def forecast_weighted(days: int = 16, zone: str | None = None) -> pd.DataFrame:
     return _pop_weighted(df, zone=zone)
 
 
+# ---------------------------------------------------------------------------
+# Degree days (HDD / CDD)
+# ---------------------------------------------------------------------------
+# Heating & cooling degree days turn temperature into a weather-demand signal:
+# how far each day sits below (heating) or above (cooling) a comfort base, in
+# °F-days. They're the standard way to weather-normalise load and to compare
+# how warm/cold one season ran versus another. The US convention bases them on
+# 65 °F and on the NOAA daily mean, (Tmin + Tmax) / 2.
+
+DEFAULT_BASE_F = 65.0
+_DD_COLS = ["date", "tavg_f", "tmin_f", "tmax_f", "hdd", "cdd"]
+
+
+def _daily_temp_from_wx(wx: pd.DataFrame, min_hours: int = 20) -> pd.DataFrame:
+    """Collapse an hourly (pop-weighted) frame to a daily temperature summary.
+
+    Returns [date, tavg_f, tmin_f, tmax_f, hours] where ``tavg_f`` is the NOAA
+    daily mean (Tmin + Tmax) / 2. Days with fewer than ``min_hours`` readings
+    (e.g. the ERA5-lag frontier or a partial forecast day) are dropped so a
+    half-day doesn't understate that day's degree days.
+    """
+    cols = ["date", "tavg_f", "tmin_f", "tmax_f", "hours"]
+    if wx is None or wx.empty or "temp_f" not in wx.columns:
+        return pd.DataFrame(columns=cols)
+    w = wx.dropna(subset=["temp_f"]).copy()
+    if w.empty:
+        return pd.DataFrame(columns=cols)
+    w["datetime_beginning_ept"] = pd.to_datetime(w["datetime_beginning_ept"])
+    w["date"] = w["datetime_beginning_ept"].dt.date
+    g = w.groupby("date")["temp_f"]
+    out = pd.DataFrame({
+        "date": pd.to_datetime(list(g.groups.keys())).date,
+        "tmin_f": g.min().to_numpy(),
+        "tmax_f": g.max().to_numpy(),
+        "hours": g.count().to_numpy(),
+    })
+    out = out[out["hours"] >= int(min_hours)].copy()
+    out["tavg_f"] = (out["tmin_f"] + out["tmax_f"]) / 2.0
+    return out[["date", "tavg_f", "tmin_f", "tmax_f", "hours"]].reset_index(drop=True)
+
+
+def _degree_days_from_wx(wx: pd.DataFrame, base: float = DEFAULT_BASE_F,
+                         min_hours: int = 20) -> pd.DataFrame:
+    dt = _daily_temp_from_wx(wx, min_hours=min_hours)
+    if dt.empty:
+        return pd.DataFrame(columns=_DD_COLS)
+    dt["hdd"] = (base - dt["tavg_f"]).clip(lower=0.0)
+    dt["cdd"] = (dt["tavg_f"] - base).clip(lower=0.0)
+    return dt[_DD_COLS].reset_index(drop=True)
+
+
+def degree_days(start=None, end_excl=None, zone: str | None = None,
+                base: float = DEFAULT_BASE_F, min_hours: int = 20) -> pd.DataFrame:
+    """Daily heating/cooling degree days (°F-days) from the stored ERA5 weather.
+
+    ``HDD = max(0, base − Tavg)`` and ``CDD = max(0, Tavg − base)``, with
+    ``Tavg`` the NOAA daily mean (Tmin + Tmax) / 2 of the population-weighted
+    air temperature. ``zone`` restricts to a single PJM zone's cities (else the
+    whole footprint, pop-weighted); ``base`` defaults to 65 °F.
+
+    Returns columns [date, tavg_f, tmin_f, tmax_f, hdd, cdd], one row per day.
+    """
+    wx = weighted_temp(start=start, end_excl=end_excl, zone=zone)
+    return _degree_days_from_wx(wx, base=base, min_hours=min_hours)
+
+
+def forecast_degree_days(days: int = 16, zone: str | None = None,
+                         base: float = DEFAULT_BASE_F) -> pd.DataFrame:
+    """Upcoming daily HDD/CDD from the Open-Meteo forecast (next ``days`` days).
+
+    Same shape as :func:`degree_days`. Live forecast data — not persisted.
+    Returns empty on fetch failure so callers can degrade cleanly.
+    """
+    wx = forecast_weighted(days=days, zone=zone)
+    # A forecast day may not yet carry all 24 hours; relax the completeness gate.
+    return _degree_days_from_wx(wx, base=base, min_hours=1)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="PJM ERA5 weather downloader (Open-Meteo).")
     sub = parser.add_subparsers(dest="cmd")

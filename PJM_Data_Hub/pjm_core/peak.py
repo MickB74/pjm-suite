@@ -65,12 +65,17 @@ def daily_peaks(load: pd.DataFrame, year: int) -> pd.DataFrame:
     sub["day"] = sub["datetime_beginning_ept"].dt.date
     peaks = sub.loc[sub.groupby("day")["mw"].idxmax()].copy()
     peaks = peaks.rename(columns={"datetime_beginning_ept": "peak_hour", "mw": "peak_mw"})
-    return peaks[["peak_hour", "peak_mw", "day"]].reset_index(drop=True)
+    peaks["eligible"] = peaks["day"].map(is_eligible_5cp)
+    return peaks[["peak_hour", "peak_mw", "day", "eligible"]].reset_index(drop=True)
 
 
 def five_cp(load: pd.DataFrame, year: int) -> pd.DataFrame:
-    """The five coincident peaks so far this summer, ranked (rank 1 = highest)."""
-    p = daily_peaks(load, year).sort_values("peak_mw", ascending=False).head(N_CP)
+    """The five coincident peaks so far this summer, ranked (rank 1 = highest).
+
+    Only eligible days (non-holiday weekdays) can be a 5CP, per PJM rule.
+    """
+    p = daily_peaks(load, year)
+    p = p[p["eligible"]].sort_values("peak_mw", ascending=False).head(N_CP)
     p = p.reset_index(drop=True)
     p.insert(0, "rank", range(1, len(p) + 1))
     return p
@@ -79,10 +84,11 @@ def five_cp(load: pd.DataFrame, year: int) -> pd.DataFrame:
 def current_threshold(load: pd.DataFrame, year: int) -> float | None:
     """Load a new day must beat to enter the current top-5.
 
-    The Nth-highest daily peak so far this summer. If fewer than 5 summer days
-    exist yet, any new day would make the board, so the threshold is 0.
+    The Nth-highest *eligible* daily peak so far this summer. If fewer than 5
+    eligible days exist yet, any new eligible day makes the board, so 0.
     """
-    peaks = daily_peaks(load, year)["peak_mw"].sort_values(ascending=False)
+    p = daily_peaks(load, year)
+    peaks = p.loc[p["eligible"], "peak_mw"].sort_values(ascending=False)
     if peaks.empty:
         return None
     return float(peaks.iloc[N_CP - 1]) if len(peaks) >= N_CP else 0.0
@@ -94,25 +100,34 @@ def current_threshold(load: pd.DataFrame, year: int) -> float | None:
 
 @dataclass
 class LoadTempModel:
-    """Quadratic fit of daily RTO peak (MW) on daily-max apparent temp (°F)."""
-    coeffs: np.ndarray          # np.polyfit degree-2 coefficients
+    """Quadratic fit of daily RTO peak (MW) on daily-max apparent temp (°F),
+    with an additive shift for reduced-load days (weekends & NERC holidays).
+
+    ``coeffs`` describe a *weekday*; ``offday_offset`` (typically negative) is the
+    MW the peak drops on a weekend or holiday at the same temperature. This lets
+    a hot Saturday be scored correctly — 5CPs are the summer's highest RTO peaks
+    and, because non-work-day load runs lower, they land on weekdays in practice.
+    """
+    coeffs: np.ndarray          # degree-2 temp coefficients (weekday baseline)
+    offday_offset: float        # MW shift applied on weekend/holiday days
     resid_std: float            # residual standard deviation (MW)
     n: int                      # sample size
     t_min: float                # temp range the fit was trained on
     t_max: float
 
-    def predict(self, apparent_f):
+    def predict(self, apparent_f, is_offday=False):
         arr = np.asarray(apparent_f, dtype=float)
-        return np.polyval(self.coeffs, arr)
+        base = np.polyval(self.coeffs, arr)
+        return base + np.asarray(is_offday, dtype=float) * self.offday_offset
 
-    def prob_above(self, apparent_f, threshold_mw: float):
+    def prob_above(self, apparent_f, threshold_mw: float, is_offday=False):
         """P(actual daily peak > threshold) given forecast apparent temp.
 
         Normal around the model prediction using the residual spread — a rough
         but honest read on how likely the day cracks the current 5CP.
         """
         from math import erf, sqrt
-        mu = self.predict(apparent_f)
+        mu = self.predict(apparent_f, is_offday)
         sd = max(self.resid_std, 1.0)
         z = (np.asarray(mu, dtype=float) - threshold_mw) / (sd * sqrt(2.0))
         # 1 - CDF(threshold) = 0.5 * (1 + erf(z))
@@ -120,14 +135,67 @@ class LoadTempModel:
         return vfunc(z)
 
 
+def _observed_summer_holidays(year: int) -> dict:
+    """PJM-observed holidays inside the 5CP window (Jun 1–Sep 30), by date.
+
+    Only Independence Day and Labor Day land in summer (Memorial Day is May).
+    Independence Day is **observed** on the nearest weekday when Jul 4 falls on
+    a weekend — e.g. in 2026 Jul 4 is a Saturday, so PJM observes it Friday
+    Jul 3, and *that Friday* is the ineligible day (confirmed by PJM's member
+    notice). Labor Day is the first Monday of September.
+    """
+    from datetime import date
+    hols = {}
+    j4 = date(year, 7, 4)
+    if j4.weekday() == 5:        # Saturday → observed Friday
+        j4 = date(year, 7, 3)
+    elif j4.weekday() == 6:      # Sunday → observed Monday
+        j4 = date(year, 7, 5)
+    hols[j4] = "Independence Day"
+    sep1 = date(year, 9, 1)
+    labor = date(year, 9, 1 + ((0 - sep1.weekday()) % 7))  # first Monday
+    hols[labor] = "Labor Day"
+    return hols
+
+
+def holiday_name(d) -> str | None:
+    """Name of the PJM-observed holiday on ``d``, or None."""
+    return _observed_summer_holidays(d.year).get(d)
+
+
+def is_eligible_5cp(d) -> bool:
+    """True if ``d`` can be an RTO 5CP: a weekday that is not a PJM holiday.
+
+    Per PJM, the 5 CPs are drawn only from non-holiday weekdays — weekends and
+    observed holidays are never eligible, regardless of how hot they run.
+    """
+    return d.weekday() < 5 and holiday_name(d) is None
+
+
+def _is_offday(d) -> bool:
+    """True for reduced-load days — weekends and observed holidays.
+
+    Equivalent to *not eligible*; used both to gate 5CP eligibility and as the
+    load-model's weekend/holiday term.
+    """
+    return not is_eligible_5cp(d)
+
+
 def _daily_max_apparent(wx: pd.DataFrame) -> pd.DataFrame:
-    """Daily maximum apparent temperature (°F) from an hourly weather frame."""
+    """Daily maximum apparent (and, when present, actual air) temperature (°F).
+
+    Always returns ``tmax_apparent_f``; also returns ``tmax_f`` (daily-max air
+    temperature) when the frame carries a ``temp_f`` column.
+    """
     if wx.empty:
         return pd.DataFrame(columns=["day", "tmax_apparent_f"])
     w = wx.copy()
     w["day"] = pd.to_datetime(w["datetime_beginning_ept"]).dt.date
-    g = (w.groupby("day")["apparent_f"].max()
-         .reset_index().rename(columns={"apparent_f": "tmax_apparent_f"}))
+    aggs = {"apparent_f": "max"}
+    if "temp_f" in w.columns:
+        aggs["temp_f"] = "max"
+    g = (w.groupby("day").agg(aggs).reset_index()
+         .rename(columns={"apparent_f": "tmax_apparent_f", "temp_f": "tmax_f"}))
     return g
 
 
@@ -161,9 +229,25 @@ def fit_load_temp_model(load: pd.DataFrame | None = None,
 
     t = df["tmax_apparent_f"].to_numpy(dtype=float)
     y = df["peak_mw"].to_numpy(dtype=float)
-    coeffs = np.polyfit(t, y, 2)
-    resid = y - np.polyval(coeffs, t)
-    return LoadTempModel(coeffs=coeffs, resid_std=float(resid.std(ddof=1)),
+    offday = df["day"].map(_is_offday).to_numpy(dtype=float)
+
+    # Least-squares fit of peak ~ a·t² + b·t + c + d·offday. The offday column
+    # captures the weekend/holiday load drop so the temp curve isn't biased and
+    # a hot weekend isn't scored like a hot weekday. Fall back to a plain
+    # quadratic if history has no reduced-load days to identify the offset.
+    if offday.any() and not offday.all():
+        X = np.column_stack([t ** 2, t, np.ones_like(t), offday])
+        beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+        coeffs = beta[:3]
+        offday_offset = float(beta[3])
+        resid = y - X @ beta
+    else:
+        coeffs = np.polyfit(t, y, 2)
+        offday_offset = 0.0
+        resid = y - np.polyval(coeffs, t)
+
+    return LoadTempModel(coeffs=coeffs, offday_offset=offday_offset,
+                         resid_std=float(resid.std(ddof=1)),
                          n=len(df), t_min=float(t.min()), t_max=float(t.max()))
 
 
@@ -207,10 +291,16 @@ def predict_upcoming(days: int = 16,
         return pd.DataFrame()
 
     fc = fc.sort_values("day").reset_index(drop=True)
-    fc["predicted_peak_mw"] = model.predict(fc["tmax_apparent_f"].to_numpy())
+    t = fc["tmax_apparent_f"].to_numpy()
+    fc["eligible"] = fc["day"].map(is_eligible_5cp)
+    fc["holiday"] = fc["day"].map(lambda d: holiday_name(d) or "")
+    off = (~fc["eligible"]).to_numpy()
+    fc["predicted_peak_mw"] = model.predict(t, is_offday=off)
     fc["threshold_mw"] = threshold
     fc["margin_mw"] = fc["predicted_peak_mw"] - threshold
-    fc["prob_5cp"] = model.prob_above(fc["tmax_apparent_f"].to_numpy(), threshold)
+    # Ineligible days (weekends / observed holidays) cannot be a 5CP → prob 0.
+    prob = model.prob_above(t, threshold, is_offday=off)
+    fc["prob_5cp"] = np.where(fc["eligible"].to_numpy(), prob, 0.0)
     fc["extrapolated"] = (fc["tmax_apparent_f"] > model.t_max) | \
                          (fc["tmax_apparent_f"] < model.t_min)
     return fc

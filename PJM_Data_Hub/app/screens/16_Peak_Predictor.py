@@ -94,17 +94,31 @@ if pred.empty:
 st.subheader("Next days ranked by 5CP risk")
 disp = pred.copy()
 disp["Date"] = pd.to_datetime(disp["day"]).dt.strftime("%a %b %d")
-disp["Risk"] = disp["prob_5cp"].map(peak.risk_label)
+disp["Risk"] = [
+    "⚪ Not eligible" if not e else peak.risk_label(p)
+    for e, p in zip(disp["eligible"], disp["prob_5cp"])]
+disp["Air temp °F"] = disp.get("tmax_f", pd.NA)
 disp["Apparent °F"] = disp["tmax_apparent_f"]
 disp["Predicted peak (MW)"] = disp["predicted_peak_mw"]
 disp["Margin vs 5CP (MW)"] = disp["margin_mw"]
 disp["5CP prob"] = disp["prob_5cp"]
-disp["Forecast"] = disp["extrapolated"].map({True: "⚠ beyond training range", False: ""})
-cols = ["Date", "Risk", "Apparent °F", "Predicted peak (MW)",
-        "Margin vs 5CP (MW)", "5CP prob", "Forecast"]
+def _note(row):
+    parts = []
+    if not row["eligible"]:
+        if row.get("holiday"):
+            parts.append(f"Not eligible — {row['holiday']} (observed holiday)")
+        else:
+            parts.append("Not eligible — weekend")
+    if row["extrapolated"]:
+        parts.append("⚠ beyond training range")
+    return " · ".join(parts)
+disp["Note"] = disp.apply(_note, axis=1)
+cols = ["Date", "Risk", "Air temp °F", "Apparent °F", "Predicted peak (MW)",
+        "Margin vs 5CP (MW)", "5CP prob", "Note"]
 st.dataframe(
     disp[cols].style.format({
-        "Apparent °F": "{:.0f}", "Predicted peak (MW)": "{:,.0f}",
+        "Air temp °F": "{:.0f}", "Apparent °F": "{:.0f}",
+        "Predicted peak (MW)": "{:,.0f}",
         "Margin vs 5CP (MW)": "{:+,.0f}", "5CP prob": "{:.0%}",
     }),
     use_container_width=True, hide_index=True)
@@ -114,8 +128,9 @@ st.caption("Risk bands: 🔴 High ≥66% · 🟠 Elevated ≥33% · 🟡 Watch �
 # --- Predicted peaks vs the current threshold -------------------------------
 st.subheader("Predicted daily peak vs. the 5CP threshold")
 fig = go.Figure()
-colors = ["#d62728" if p >= 0.66 else "#ff7f0e" if p >= 0.33
-          else "#e8c400" if p >= 0.10 else "#2ca02c" for p in pred["prob_5cp"]]
+colors = ["#555" if not e else "#d62728" if p >= 0.66 else "#ff7f0e" if p >= 0.33
+          else "#e8c400" if p >= 0.10 else "#2ca02c"
+          for e, p in zip(pred["eligible"], pred["prob_5cp"])]
 fig.add_bar(x=pd.to_datetime(pred["day"]), y=pred["predicted_peak_mw"],
             marker_color=colors, name="Predicted peak",
             hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} MW<extra></extra>")
@@ -132,7 +147,15 @@ with st.expander("Model & method"):
     st.markdown(
         f"""
 - **Model:** quadratic fit of *daily RTO peak (MW)* on *daily-max apparent
-  temperature (°F)*, trained on **{model.n:,} summer days** across all history.
+  temperature (°F)*, trained on **{model.n:,} summer days** across all history,
+  plus a **weekend/holiday term** ({model.offday_offset:+,.0f} MW at equal
+  temperature) so a hot Saturday isn't scored like a hot weekday.
+- **5CP eligibility:** per PJM, the 5 CPs are drawn **only from non-holiday
+  weekdays** — weekends and observed holidays are *never* eligible, however hot
+  they run, so they're gated to 0% here and excluded from the threshold.
+  Independence Day is observed on the nearest weekday when Jul 4 is a weekend
+  (e.g. **Fri Jul 3, 2026** is the ineligible day, per PJM's member notice);
+  Labor Day is the first Monday of September.
 - **Residual spread:** ±{model.resid_std:,.0f} MW (1σ) — used to turn a
   predicted peak into a 5CP probability against the current threshold.
 - **Training temp range:** {model.t_min:.0f}–{model.t_max:.0f} °F apparent;

@@ -46,6 +46,7 @@ nav = st.navigation({
         st.Page(f"{P}/4_Price_Forecast.py", title="Price Forecast", icon="📉"),
         st.Page(f"{P}/10_Peak_Day_Analysis.py", title="Peak Day Analysis", icon="⛰️"),
         st.Page(f"{P}/14_Coincident_Peaks.py", title="5CP & Weather", icon="🌡️"),
+        st.Page(f"{P}/20_Degree_Days.py", title="Degree Days (HDD/CDD)", icon="🌤️"),
         st.Page(f"{P}/16_Peak_Predictor.py", title="5CP Peak Predictor", icon="🔮"),
         st.Page(f"{P}/17_PLC_Calculator.py", title="PLC Cost Calculator", icon="🧮"),
         st.Page(f"{P}/6_DART_Spread.py", title="DA–RT Spread", icon="⚖️"),
