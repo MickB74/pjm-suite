@@ -19,17 +19,16 @@
     <key>WorkingDirectory</key>
     <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub</string>
 
-    <!-- 06:30 local time every day. -->
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>6</integer>
-        <key>Minute</key>
-        <integer>30</integer>
-    </dict>
+    <!-- Run roughly once a day, catching up on wake. Unlike a fixed clock
+         time, StartInterval fires the job shortly after the Mac wakes if the
+         24h interval elapsed while it was asleep. RunAtLoad also fires it once
+         at login. Same-day snapshots dedup/replace, so an extra run is
+         harmless. -->
+    <key>StartInterval</key>
+    <integer>86400</integer>
 
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>/Users/michaelbarry/Documents/GitHub/pjm-suite/PJM_Data_Hub/logs/queue_snapshot.log</string>

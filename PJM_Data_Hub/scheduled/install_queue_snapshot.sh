@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install (or reinstall) the daily PJM interconnection-queue snapshot as a
-# macOS launchd agent. Runs orchestrate.py update queue at 06:30 local time
-# every day so the queue's change-over-time history accrues even when the
-# Streamlit app isn't opened.
+# macOS launchd agent. Runs orchestrate.py update queue once a day (catching up
+# shortly after the Mac wakes) so the queue's change-over-time history accrues
+# even when the Streamlit app isn't opened.
 #
 #   ./scheduled/install_queue_snapshot.sh          # install / reload
 #   ./scheduled/install_queue_snapshot.sh remove   # uninstall
@@ -23,7 +23,7 @@ mkdir -p "${HOME}/Library/LaunchAgents"
 cp "$SRC" "$DEST"
 launchctl unload "$DEST" 2>/dev/null || true
 launchctl load "$DEST"
-echo "Installed ${LABEL} → daily 06:30. It runs:"
+echo "Installed ${LABEL} → daily (runs at login + catches up on wake). It runs:"
 echo "  orchestrate.py update queue"
 echo "Logs: PJM_Data_Hub/logs/queue_snapshot.log"
 echo "Trigger a test run now with:  launchctl start ${LABEL}"
