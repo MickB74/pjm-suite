@@ -104,6 +104,33 @@ fig = px.bar(sub, x="delivery_year", y="clearing_price_mw_day", color="lda",
 fig.update_layout(height=420, margin=dict(t=40))
 st.plotly_chart(fig, use_container_width=True)
 
+with st.expander("Why all LDAs clear at the same price now — the FERC price cap"):
+    st.markdown(
+        "From **2007/2008 through 2025/2026**, constrained LDAs like BGE, DOM, and "
+        "EMAAC regularly cleared **above** the RTO price — sometimes dramatically "
+        "(BGE hit $466/MW-day in 2025/2026). This reflected local supply shortages "
+        "behind transmission-constrained boundaries.\n\n"
+        "Starting with the **2026/2027 delivery year**, FERC approved a **price cap "
+        "and floor** (a \"collar\") on the BRA. The cap has flattened all regional "
+        "price differences — no zone can clear above it, so constrained zones that "
+        "used to separate no longer do:\n\n"
+        "| Delivery Year | Price Cap | Result |\n"
+        "|---|---|---|\n"
+        "| 2026/2027 | $329.17/MW-day | All LDAs uniform |\n"
+        "| 2027/2028 | $333.44/MW-day | All LDAs uniform |\n"
+        "| 2028/2029 | $325.00/MW-day | All LDAs uniform |\n\n"
+        "**What prices would have been without the cap:** PJM's own simulations show "
+        "the 2027/2028 auction would have cleared at ~$542/MW-day for Dominion, and "
+        "the 2028/2029 auction at ~$777/MW-day for ComEd — more than double the "
+        "capped price.\n\n"
+        "**Why the cap exists:** Capacity prices spiked 9x between the 2024/2025 and "
+        "2025/2026 auctions (from $29 to $270/MW-day RTO-wide) due to generator "
+        "retirements, rising load forecasts, and new accreditation rules. The collar "
+        "protects consumers from runaway prices while still signaling scarcity.\n\n"
+        "**What's next:** PJM expects to return to the normal 3-year-ahead auction "
+        "schedule by the **2030/2031 delivery year** (BRA in May 2027). The cap/floor "
+        "structure may evolve as FERC reviews market design.")
+
 # Latest-year snapshot.
 latest_year = df["delivery_year"].max()
 latest = df[df["delivery_year"] == latest_year]
