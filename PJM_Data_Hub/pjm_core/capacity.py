@@ -28,23 +28,31 @@ from pjm_core import paths
 
 # ---------------------------------------------------------------------------
 # Seed table — RPM Base Residual Auction Resource Clearing Prices ($/MW-day).
-# RTO-wide unless the LDA separated. DOM rows included where the Dominion LDA
-# priced apart from the RTO. VERIFY against PJM's posted BRA results; edit the
-# CSV (data/capacity/rpm_bra_clearing_prices.csv) to correct or extend.
+# RTO row for every delivery year; additional LDA rows only where that LDA
+# separated (cleared above the RTO price). When all LDAs clear at the price
+# cap, only the RTO row is needed. VERIFY against PJM's posted BRA results;
+# edit the CSV (data/capacity/rpm_bra_clearing_prices.csv) to correct/extend.
 # ---------------------------------------------------------------------------
 _SEED = [
     # delivery_year, lda, clearing_price_mw_day, auction
+    # Source: PJM BRA reports (https://www.pjm.com/markets-and-operations/rpm)
+    ("2015/2016", "RTO", 136.00, "BRA"),
+    ("2016/2017", "RTO",  59.37, "BRA"),
+    ("2017/2018", "RTO", 120.00, "BRA"),
     ("2018/2019", "RTO", 164.77, "BRA"),
     ("2019/2020", "RTO", 100.00, "BRA"),
-    ("2020/2021", "RTO", 76.53, "BRA"),
+    ("2020/2021", "RTO",  76.53, "BRA"),
     ("2021/2022", "RTO", 140.00, "BRA"),
-    ("2022/2023", "RTO", 50.00, "BRA"),
-    ("2023/2024", "RTO", 34.13, "BRA"),
-    ("2024/2025", "RTO", 28.92, "BRA"),
+    ("2022/2023", "RTO",  50.00, "BRA"),
+    ("2023/2024", "RTO",  34.13, "BRA"),
+    ("2024/2025", "RTO",  28.92, "BRA"),
+    ("2024/2025", "BGE",  73.00, "BRA"),
     ("2025/2026", "RTO", 269.92, "BRA"),
-    ("2025/2026", "DOM", 444.26, "BRA"),   # DOM LDA separated high in the 2024 BRA
-    ("2026/2027", "RTO", 329.17, "BRA"),   # cleared at the admin price cap
-    ("2026/2027", "DOM", 329.17, "BRA"),
+    ("2025/2026", "DOM", 444.26, "BRA"),
+    ("2025/2026", "BGE", 466.35, "BRA"),
+    ("2026/2027", "RTO", 329.17, "BRA"),   # price cap; all LDAs uniform
+    ("2027/2028", "RTO", 333.44, "BRA"),   # price cap; all LDAs uniform
+    ("2028/2029", "RTO", 325.00, "BRA"),   # price cap; all LDAs uniform
 ]
 
 SEED_COLUMNS = ["delivery_year", "lda", "clearing_price_mw_day", "auction"]
