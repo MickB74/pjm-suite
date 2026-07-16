@@ -75,15 +75,30 @@ if df.empty:
     st.stop()
 
 ldas = sorted(df["lda"].unique())
+years_sorted = sorted(df["delivery_year"].unique())
 with st.container(border=True):
-    sel_ldas = st.multiselect("LDAs", ldas,
-                              default=[l for l in ("RTO", "DOM") if l in ldas] or ldas)
+    sel_ldas = st.multiselect(
+        "LDAs", ldas,
+        default=[l for l in ("RTO", "DOM", "BGE", "EMAAC", "MAAC") if l in ldas] or ldas)
 
-sub = df[df["lda"].isin(sel_ldas)] if sel_ldas else df
+sel_ldas = sel_ldas or ldas
+
+# Build a complete grid so every selected LDA has a value for every year.
+# When an LDA didn't separate, its price equals the RTO price for that year.
+rto = df[df["lda"] == "RTO"].set_index("delivery_year")["clearing_price_mw_day"]
+rows = []
+for yr in years_sorted:
+    for lda_name in sel_ldas:
+        hit = df[(df["delivery_year"] == yr) & (df["lda"] == lda_name)]
+        price = float(hit["clearing_price_mw_day"].iloc[0]) if not hit.empty else rto.get(yr)
+        if price is not None:
+            rows.append({"delivery_year": yr, "lda": lda_name, "clearing_price_mw_day": price})
+sub = pd.DataFrame(rows)
 
 # Clearing-price history.
 fig = px.bar(sub, x="delivery_year", y="clearing_price_mw_day", color="lda",
              barmode="group",
+             category_orders={"delivery_year": years_sorted},
              labels={"delivery_year": "Delivery year", "clearing_price_mw_day": "$/MW-day", "lda": "LDA"},
              title="RPM BRA clearing price by delivery year")
 fig.update_layout(height=420, margin=dict(t=40))

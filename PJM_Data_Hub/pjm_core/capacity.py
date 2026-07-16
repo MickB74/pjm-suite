@@ -36,6 +36,16 @@ from pjm_core import paths
 _SEED = [
     # delivery_year, lda, clearing_price_mw_day, auction
     # Source: PJM BRA reports (https://www.pjm.com/markets-and-operations/rpm)
+    # Only separated (constrained) LDAs get their own row; unseparated LDAs
+    # inherit the RTO price via price_for() fallback.
+    ("2007/2008", "RTO",  40.80, "BRA"),
+    ("2008/2009", "RTO", 111.92, "BRA"),
+    ("2009/2010", "RTO", 102.04, "BRA"),
+    ("2010/2011", "RTO", 174.29, "BRA"),
+    ("2011/2012", "RTO", 110.00, "BRA"),
+    ("2012/2013", "RTO",  16.46, "BRA"),
+    ("2013/2014", "RTO",  27.73, "BRA"),
+    ("2014/2015", "RTO", 125.99, "BRA"),
     ("2015/2016", "RTO", 136.00, "BRA"),
     ("2016/2017", "RTO",  59.37, "BRA"),
     ("2017/2018", "RTO", 120.00, "BRA"),
@@ -43,16 +53,24 @@ _SEED = [
     ("2019/2020", "RTO", 100.00, "BRA"),
     ("2020/2021", "RTO",  76.53, "BRA"),
     ("2021/2022", "RTO", 140.00, "BRA"),
-    ("2022/2023", "RTO",  50.00, "BRA"),
-    ("2023/2024", "RTO",  34.13, "BRA"),
-    ("2024/2025", "RTO",  28.92, "BRA"),
-    ("2024/2025", "BGE",  73.00, "BRA"),
-    ("2025/2026", "RTO", 269.92, "BRA"),
-    ("2025/2026", "DOM", 444.26, "BRA"),
-    ("2025/2026", "BGE", 466.35, "BRA"),
-    ("2026/2027", "RTO", 329.17, "BRA"),   # price cap; all LDAs uniform
-    ("2027/2028", "RTO", 333.44, "BRA"),   # price cap; all LDAs uniform
-    ("2028/2029", "RTO", 325.00, "BRA"),   # price cap; all LDAs uniform
+    ("2022/2023", "RTO",   50.00, "BRA"),
+    ("2022/2023", "EMAAC", 95.79, "BRA"),
+    ("2022/2023", "MAAC",  97.86, "BRA"),
+    ("2022/2023", "BGE",  126.50, "BRA"),
+    ("2023/2024", "RTO",   34.13, "BRA"),
+    ("2023/2024", "MAAC",  49.49, "BRA"),
+    ("2023/2024", "BGE",   69.95, "BRA"),
+    ("2024/2025", "RTO",   28.92, "BRA"),
+    ("2024/2025", "EMAAC", 54.95, "BRA"),
+    ("2024/2025", "MAAC",  49.49, "BRA"),
+    ("2024/2025", "SWMAAC",49.49, "BRA"),
+    ("2024/2025", "BGE",   73.00, "BRA"),
+    ("2025/2026", "RTO",  269.92, "BRA"),
+    ("2025/2026", "DOM",  444.26, "BRA"),
+    ("2025/2026", "BGE",  466.35, "BRA"),
+    ("2026/2027", "RTO",  329.17, "BRA"),   # price cap; all LDAs uniform
+    ("2027/2028", "RTO",  333.44, "BRA"),   # price cap; all LDAs uniform
+    ("2028/2029", "RTO",  325.00, "BRA"),   # price cap; all LDAs uniform
 ]
 
 SEED_COLUMNS = ["delivery_year", "lda", "clearing_price_mw_day", "auction"]
