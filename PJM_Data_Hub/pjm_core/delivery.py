@@ -23,21 +23,33 @@ Two ways to populate it, mirroring ``pjm_core.capacity``:
    transmission-voltage C&I classes is spotty, so treat it as a seed/cross-check
    for the CSV rather than the source of truth.
 
-Bill math (per month), computed by ``estimate_delivery``:
+Bill math (per month), computed by ``estimate_delivery`` — the demand charge is
+SEASONAL because most PJM C&I tariffs bill a higher $/kW in summer (a base rate
+plus a summer adder, which collapses to a summer rate vs a winter rate):
+
+    demand_rate = dist_demand_summer_kw_month  if billing month ∈ summer_months
+                  dist_demand_winter_kw_month  otherwise
 
     delivery $ = customer_charge_month
-               + dist_demand_kw_month        × billing_demand_kw
-               + transmission_demand_kw_month × nspl_kw            (NITS)
-               + dist_energy_kwh             × kwh
-               + riders_kwh                  × kwh
+               + demand_rate                  × billing_demand_kw
+               + transmission_demand_kw_month × nspl_kw            (NITS, if $/kW)
+               + transmission_energy_kwh      × kwh                (NITS, if $/kWh)
+               + dist_energy_kwh              × kwh
+               + riders_kwh                   × kwh
 
 ``billing_demand_kw`` is the metered monthly peak; ``nspl_kw`` is the customer's
 Network Service Peak Load (defaults to the metered peak if not supplied).
+Transmission (NITS) is billed as a $/kW demand charge by some EDCs (PSE&G, ACE)
+and as a $/kWh charge by others (JCP&L) — carry both columns and populate the
+one the tariff uses. ``capacity_kw_day`` is the EDC's BGS-CIEP generation-
+capacity price ($/kW-day on the PLC tag, billed year-round); 0 means "fall back
+to the RPM capacity table" — the Full Bill screen reads it for the supply side.
 
 Columns (edc_ci_delivery_rates.csv):
     zone, edc, rate_class, voltage, customer_charge_month,
-    dist_demand_kw_month, transmission_demand_kw_month,
-    dist_energy_kwh, riders_kwh, verified, source
+    dist_demand_summer_kw_month, dist_demand_winter_kw_month, summer_months,
+    transmission_demand_kw_month, transmission_energy_kwh,
+    dist_energy_kwh, riders_kwh, capacity_kw_day, verified, source
 """
 
 from __future__ import annotations
@@ -60,38 +72,66 @@ from pjm_core import credentials, paths
 # DOM, PECO and COMED are the first zones fleshed out (per request); the rest
 # are structural stubs so every major zone resolves to *something*.
 # ---------------------------------------------------------------------------
+# Representative LARGE C&I rows, one per zone at PRIMARY delivery voltage.
+#
+# NEW JERSEY (PSEG, JCPL, AECO) are VERIFIED from the filed tariffs (see per-row
+# source + effective date). All other zones remain order-of-magnitude PLACEHOLDERS
+# (verified == "no"): summer == winter demand (no seasonality captured yet) and
+# capacity_kw_day == 0 (fall back to the RPM table). Replace them zone-by-zone the
+# same way NJ was done.
+#
+# Cols: zone, edc, rate_class, voltage, cust$/mo,
+#       dist_summer$/kW, dist_winter$/kW, summer_months,
+#       trans$/kW, trans$/kWh, dist$/kWh, riders$/kWh, capacity$/kW-day,
+#       verified, source
 _SEED = [
-    # zone, edc, rate_class, voltage, cust$/mo, dist$/kW, trans(NITS)$/kW, dist$/kWh, riders$/kWh, verified, source
-    ("DOM",     "Dominion Energy Virginia",        "GS-4 Large General",   "Primary",      500.0, 4.50, 3.00, 0.0020, 0.0040, "no", "Dominion VA filed tariff — VERIFY"),
-    ("PECO",    "PECO Energy",                      "HT High Tension",      "Primary",      180.0, 3.50, 4.00, 0.0000, 0.0050, "no", "PECO PA Tariff Electric Pa. P.U.C. No. 6 — VERIFY"),
-    ("COMED",   "Commonwealth Edison",              "Rate 6L Very Large",   "Primary",      430.0, 6.50, 3.50, 0.0000, 0.0060, "no", "ComEd Rate 6 / Ill.C.C. No. 10 — VERIFY"),
-    ("BGE",     "Baltimore Gas & Electric",         "Schedule GL",          "Primary",      300.0, 4.00, 3.50, 0.0010, 0.0050, "no", "BGE MD tariff — VERIFY"),
-    ("PEPCO",   "Potomac Electric Power (Pepco)",   "GT Large Demand",      "Primary",      320.0, 4.20, 3.50, 0.0010, 0.0050, "no", "Pepco DC/MD tariff — VERIFY"),
-    ("PPL",     "PPL Electric Utilities",           "LP4 Large Power",      "Primary",      250.0, 3.80, 4.00, 0.0000, 0.0050, "no", "PPL PA tariff — VERIFY"),
-    ("PSEG",    "Public Service Electric & Gas",    "LPL Large Power",      "Primary",      280.0, 4.00, 4.20, 0.0000, 0.0055, "no", "PSE&G NJ tariff — VERIFY"),
-    ("JCPL",    "Jersey Central Power & Light",     "GT Large General",     "Primary",      260.0, 3.90, 4.20, 0.0000, 0.0055, "no", "JCP&L NJ tariff — VERIFY"),
-    ("AECO",    "Atlantic City Electric",           "AGS Large",            "Primary",      260.0, 3.90, 4.20, 0.0000, 0.0055, "no", "ACE NJ tariff — VERIFY"),
-    ("METED",   "Metropolitan Edison (Met-Ed)",     "GS Large Power",       "Primary",      240.0, 3.70, 4.00, 0.0000, 0.0050, "no", "Met-Ed PA tariff — VERIFY"),
-    ("PENELEC", "Pennsylvania Electric (Penelec)",  "GS Large Power",       "Primary",      240.0, 3.70, 4.00, 0.0000, 0.0050, "no", "Penelec PA tariff — VERIFY"),
-    ("DPL",     "Delmarva Power",                   "GSP-Secondary Large",  "Primary",      270.0, 4.00, 3.80, 0.0010, 0.0050, "no", "Delmarva DE/MD tariff — VERIFY"),
-    ("APS",     "Potomac Edison (Allegheny)",       "Schedule C Large",     "Primary",      230.0, 3.60, 3.80, 0.0000, 0.0045, "no", "Potomac Edison MD/WV/VA tariff — VERIFY"),
-    ("DUQ",     "Duquesne Light",                   "Rate GL Large",        "Primary",      260.0, 4.10, 4.00, 0.0000, 0.0050, "no", "Duquesne PA tariff — VERIFY"),
-    ("DAY",     "AES Ohio (DP&L)",                  "Rate GS-Primary",      "Primary",      250.0, 3.80, 3.50, 0.0000, 0.0045, "no", "AES Ohio tariff — VERIFY"),
-    ("AEP",     "AEP Ohio",                         "GS-4 Large Primary",   "Primary",      280.0, 4.00, 3.50, 0.0000, 0.0050, "no", "AEP Ohio tariff — VERIFY"),
-    ("DEOK",    "Duke Energy Ohio",                 "Rate DP Large",        "Primary",      270.0, 3.90, 3.50, 0.0000, 0.0050, "no", "Duke Ohio tariff — VERIFY"),
-    ("EKPC",    "East Kentucky Power Coop",         "Large Industrial",     "Primary",      250.0, 3.80, 3.50, 0.0000, 0.0045, "no", "EKPC / member coop tariff — VERIFY"),
+    # ── New Jersey — VERIFIED from filed tariffs (large C&I, primary voltage) ──
+    ("PSEG",    "Public Service Electric & Gas",    "LPL-Primary (Large Power & Lighting)", "Primary",
+        406.59, 15.2150, 2.6073, "6,7,8,9", 14.4285, 0.0000, 0.0000, 0.01740, 0.743,
+        "filed 6/2025", "PSE&G Electric Tariff No.17 / C&I Rate Summary PSIC0825, eff 6/1/2025; demand = annual $2.6073 + summer adder $12.6077 (Jun–Sep); trans $14.4285/kW obligation; CIEP capacity ~$22.59/kW-mo (~$0.743/kW-day) on PLC year-round — refresh supply items vs 6/2026 filing"),
+    ("PSEG",    "Public Service Electric & Gas",    "HTS-Subtransmission (High Tension Service)", "Subtransmission",
+        2038.02, 8.0161, 1.7370, "6,7,8,9", 14.4285, 0.0000, 0.0000, 0.01737, 0.743,
+        "filed 6/2025", "PSE&G Tariff No.17 / PSIC0825 eff 6/1/2025; HTS-Subtransmission demand = annual $1.7370 + summer adder $6.2791 (Jun–Sep); trans $14.4285/kW; CIEP capacity ~$0.743/kW-day on PLC year-round; SBC $0.009557 net of tax-adj credit"),
+    ("PSEG",    "Public Service Electric & Gas",    "HTS-HighVoltage (High Tension Service)", "Transmission",
+        1834.22, 0.6792, 0.6792, "6,7,8,9", 14.4285, 0.0000, 0.0000, 0.01716, 0.743,
+        "filed 6/2025", "PSE&G Tariff No.17 / PSIC0825 eff 6/1/2025; HTS-High Voltage demand FLAT $0.6792/kW (no summer adder); trans $14.4285/kW; CIEP capacity ~$0.743/kW-day on PLC year-round; SBC $0.008890 net of tax-adj credit"),
+    ("JCPL",    "Jersey Central Power & Light",     "GP General Service Primary",           "Primary",
+        64.79, 6.81, 6.33, "6,7,8,9", 0.0000, 0.01079, 0.003713, 0.01762, 0.680,
+        "filed 6/2026", "JCP&L BPU No.14 Part III, dist eff 6/1/2024 (GP demand summer $6.81/winter $6.33); trans billed $/kWh $0.007671 + TEC ≈$0.01079; BGS-CIEP capacity $0.68/kW-day on PLC year-round eff 6/1/2026; GT (transmission) demand is flat $4.25/kW"),
+    ("AECO",    "Atlantic City Electric",           "AGS-Primary (Annual General Service)", "Primary",
+        842.34, 12.09, 12.09, "6,7,8,9", 7.78, 0.001319, 0.0000, 0.02387, 0.60522,
+        "filed 6/2025", "ACE BPU No.11 Section IV, dist eff 9/1/2024 (AGS-Primary demand FLAT $12.09/kW, summer via 80% Jun–Sep ratchet, not modeled); trans $7.78/kW + TEC $0.001319/kWh; BGS-CIEP capacity $0.60522/kW-day on PLC year-round eff 6/1/2025; riders incl NGC+SBC+RGGI+standby+recon"),
+    # ── Placeholders (verified == "no"): summer == winter, capacity via RPM table ──
+    ("DOM",     "Dominion Energy Virginia",        "GS-4 Large General",   "Primary",      500.0, 4.50, 4.50, "6,7,8,9", 3.00, 0.0000, 0.0020, 0.0040, 0.0, "no", "Dominion VA filed tariff — VERIFY"),
+    ("PECO",    "PECO Energy",                      "HT High Tension",      "Primary",      180.0, 3.50, 3.50, "6,7,8,9", 4.00, 0.0000, 0.0000, 0.0050, 0.0, "no", "PECO PA Tariff Electric Pa. P.U.C. No. 6 — VERIFY"),
+    ("COMED",   "Commonwealth Edison",              "Rate 6L Very Large",   "Primary",      430.0, 6.50, 6.50, "6,7,8,9", 3.50, 0.0000, 0.0000, 0.0060, 0.0, "no", "ComEd Rate 6 / Ill.C.C. No. 10 — VERIFY"),
+    ("BGE",     "Baltimore Gas & Electric",         "Schedule GL",          "Primary",      300.0, 4.00, 4.00, "6,7,8,9", 3.50, 0.0000, 0.0010, 0.0050, 0.0, "no", "BGE MD tariff — VERIFY"),
+    ("PEPCO",   "Potomac Electric Power (Pepco)",   "GT Large Demand",      "Primary",      320.0, 4.20, 4.20, "6,7,8,9", 3.50, 0.0000, 0.0010, 0.0050, 0.0, "no", "Pepco DC/MD tariff — VERIFY"),
+    ("PPL",     "PPL Electric Utilities",           "LP4 Large Power",      "Primary",      250.0, 3.80, 3.80, "6,7,8,9", 4.00, 0.0000, 0.0000, 0.0050, 0.0, "no", "PPL PA tariff — VERIFY"),
+    ("METED",   "Metropolitan Edison (Met-Ed)",     "GS Large Power",       "Primary",      240.0, 3.70, 3.70, "6,7,8,9", 4.00, 0.0000, 0.0000, 0.0050, 0.0, "no", "Met-Ed PA tariff — VERIFY"),
+    ("PENELEC", "Pennsylvania Electric (Penelec)",  "GS Large Power",       "Primary",      240.0, 3.70, 3.70, "6,7,8,9", 4.00, 0.0000, 0.0000, 0.0050, 0.0, "no", "Penelec PA tariff — VERIFY"),
+    ("DPL",     "Delmarva Power",                   "GSP-Secondary Large",  "Primary",      270.0, 4.00, 4.00, "6,7,8,9", 3.80, 0.0000, 0.0010, 0.0050, 0.0, "no", "Delmarva DE/MD tariff — VERIFY"),
+    ("APS",     "Potomac Edison (Allegheny)",       "Schedule C Large",     "Primary",      230.0, 3.60, 3.60, "6,7,8,9", 3.80, 0.0000, 0.0000, 0.0045, 0.0, "no", "Potomac Edison MD/WV/VA tariff — VERIFY"),
+    ("DUQ",     "Duquesne Light",                   "Rate GL Large",        "Primary",      260.0, 4.10, 4.10, "6,7,8,9", 4.00, 0.0000, 0.0000, 0.0050, 0.0, "no", "Duquesne PA tariff — VERIFY"),
+    ("DAY",     "AES Ohio (DP&L)",                  "Rate GS-Primary",      "Primary",      250.0, 3.80, 3.80, "6,7,8,9", 3.50, 0.0000, 0.0000, 0.0045, 0.0, "no", "AES Ohio tariff — VERIFY"),
+    ("AEP",     "AEP Ohio",                         "GS-4 Large Primary",   "Primary",      280.0, 4.00, 4.00, "6,7,8,9", 3.50, 0.0000, 0.0000, 0.0050, 0.0, "no", "AEP Ohio tariff — VERIFY"),
+    ("DEOK",    "Duke Energy Ohio",                 "Rate DP Large",        "Primary",      270.0, 3.90, 3.90, "6,7,8,9", 3.50, 0.0000, 0.0000, 0.0050, 0.0, "no", "Duke Ohio tariff — VERIFY"),
+    ("EKPC",    "East Kentucky Power Coop",         "Large Industrial",     "Primary",      250.0, 3.80, 3.80, "6,7,8,9", 3.50, 0.0000, 0.0000, 0.0045, 0.0, "no", "EKPC / member coop tariff — VERIFY"),
 ]
 
 SEED_COLUMNS = [
-    "zone", "edc", "rate_class", "voltage",
-    "customer_charge_month", "dist_demand_kw_month",
-    "transmission_demand_kw_month", "dist_energy_kwh", "riders_kwh",
+    "zone", "edc", "rate_class", "voltage", "customer_charge_month",
+    "dist_demand_summer_kw_month", "dist_demand_winter_kw_month", "summer_months",
+    "transmission_demand_kw_month", "transmission_energy_kwh",
+    "dist_energy_kwh", "riders_kwh", "capacity_kw_day",
     "verified", "source",
 ]
 
 _NUMERIC = [
-    "customer_charge_month", "dist_demand_kw_month",
-    "transmission_demand_kw_month", "dist_energy_kwh", "riders_kwh",
+    "customer_charge_month",
+    "dist_demand_summer_kw_month", "dist_demand_winter_kw_month",
+    "transmission_demand_kw_month", "transmission_energy_kwh",
+    "dist_energy_kwh", "riders_kwh", "capacity_kw_day",
 ]
 
 
@@ -100,10 +140,41 @@ def _seed_frame() -> pd.DataFrame:
 
 
 def ensure_seed() -> None:
-    """Write the seed CSV if the user has no delivery file yet (idempotent)."""
+    """Write the seed CSV if missing, or rewrite it on a schema upgrade.
+
+    The seed schema gained seasonal-demand, dual-transmission, and capacity
+    columns. An older CSV lacking them is regenerated from the seed (the prior
+    rows were placeholders, so nothing verified is lost); re-run
+    ``refresh_from_urdb`` afterward to repopulate any URDB pulls.
+    """
     paths.DELIVERY_DIR.mkdir(parents=True, exist_ok=True)
     if not paths.DELIVERY_RATES_CSV.exists():
         _seed_frame().to_csv(paths.DELIVERY_RATES_CSV, index=False)
+        return
+    try:
+        existing_cols = pd.read_csv(paths.DELIVERY_RATES_CSV, nrows=0).columns
+    except Exception:
+        existing_cols = []
+    if not {"capacity_kw_day", "dist_demand_summer_kw_month"}.issubset(set(existing_cols)):
+        _seed_frame().to_csv(paths.DELIVERY_RATES_CSV, index=False)
+
+
+def _migrate(df: pd.DataFrame) -> pd.DataFrame:
+    """Back-fill new columns on an in-memory frame from an older-schema CSV."""
+    if "dist_demand_summer_kw_month" not in df.columns and "dist_demand_kw_month" in df.columns:
+        df["dist_demand_summer_kw_month"] = df["dist_demand_kw_month"]
+        df["dist_demand_winter_kw_month"] = df["dist_demand_kw_month"]
+    defaults = {
+        "summer_months": "6,7,8,9",
+        "transmission_energy_kwh": 0.0,
+        "capacity_kw_day": 0.0,
+        "dist_demand_summer_kw_month": 0.0,
+        "dist_demand_winter_kw_month": 0.0,
+    }
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    return df
 
 
 def load() -> pd.DataFrame:
@@ -113,10 +184,20 @@ def load() -> pd.DataFrame:
         df = pd.read_csv(paths.DELIVERY_RATES_CSV)
     except Exception:
         df = _seed_frame()
+    df = _migrate(df)
     for col in _NUMERIC:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     return df.sort_values("zone").reset_index(drop=True)
+
+
+def _parse_summer_months(val) -> set[int]:
+    """Parse a ``"6,7,8,9"`` summer-months cell into a set of ints (default Jun–Sep)."""
+    try:
+        months = {int(x) for x in str(val).split(",") if str(x).strip()}
+        return months or {6, 7, 8, 9}
+    except (ValueError, AttributeError):
+        return {6, 7, 8, 9}
 
 
 def rate_for(zone: str, rate_class: str | None = None) -> dict | None:
@@ -124,7 +205,11 @@ def rate_for(zone: str, rate_class: str | None = None) -> dict | None:
     df = load()
     hit = df[df["zone"].str.upper() == zone.upper()]
     if rate_class is not None and not hit.empty:
-        rc = hit[hit["rate_class"].str.contains(rate_class, case=False, na=False)]
+        # Exact match first (the screen passes a full rate_class string), then a
+        # literal substring — regex=False so names with "(" / ")" don't misparse.
+        exact = hit[hit["rate_class"].str.casefold() == rate_class.casefold()]
+        rc = exact if not exact.empty else hit[
+            hit["rate_class"].str.contains(rate_class, case=False, na=False, regex=False)]
         if not rc.empty:
             hit = rc
     if hit.empty:
@@ -138,6 +223,7 @@ def estimate_delivery(
     billing_demand_kw: float,
     nspl_kw: float | None = None,
     rate_class: str | None = None,
+    month: int | None = None,
 ) -> dict | None:
     """Itemize the monthly delivery charge for a C&I customer in a PJM zone.
 
@@ -149,34 +235,49 @@ def estimate_delivery(
         nspl_kw: Network Service Peak Load (kW) for the transmission/NITS charge.
             Defaults to ``billing_demand_kw`` when not supplied.
         rate_class: optional substring to pick a specific rate class.
+        month: billing month (1–12) — selects the summer vs winter demand rate.
+            When None, the winter (base, non-summer) rate is used.
 
     Returns an itemized dict of $ components plus the total, or None if the
-    zone is unknown. All figures are one month.
+    zone is unknown. All figures are one month. Transmission (NITS) combines the
+    $/kW and $/kWh forms — a tariff uses one or the other.
     """
     r = rate_for(zone, rate_class)
     if r is None:
         return None
     nspl = billing_demand_kw if nspl_kw is None else nspl_kw
 
+    summer_months = _parse_summer_months(r.get("summer_months"))
+    is_summer = month in summer_months if month else False
+    demand_rate = float(r["dist_demand_summer_kw_month"] if is_summer
+                        else r["dist_demand_winter_kw_month"])
+
     customer = float(r["customer_charge_month"])
-    dist_demand = float(r["dist_demand_kw_month"]) * billing_demand_kw
-    trans_demand = float(r["transmission_demand_kw_month"]) * nspl
-    dist_energy = float(r["dist_energy_kwh"]) * kwh
-    riders = float(r["riders_kwh"]) * kwh
-    total = customer + dist_demand + trans_demand + dist_energy + riders
+    dist_demand = demand_rate * billing_demand_kw
+    trans_demand = float(r.get("transmission_demand_kw_month") or 0.0) * nspl
+    trans_energy = float(r.get("transmission_energy_kwh") or 0.0) * kwh
+    trans_total = trans_demand + trans_energy
+    dist_energy = float(r.get("dist_energy_kwh") or 0.0) * kwh
+    riders = float(r.get("riders_kwh") or 0.0) * kwh
+    total = customer + dist_demand + trans_total + dist_energy + riders
 
     return {
         "zone": zone,
         "edc": r.get("edc"),
         "rate_class": r.get("rate_class"),
         "verified": r.get("verified"),
+        "source": r.get("source"),
         "customer_charge": round(customer, 2),
         "distribution_demand": round(dist_demand, 2),
-        "transmission_demand_nits": round(trans_demand, 2),
+        "demand_season": "summer" if is_summer else "winter",
+        "demand_rate_kw": round(demand_rate, 4),
+        "transmission_demand_nits": round(trans_total, 2),
         "distribution_energy": round(dist_energy, 2),
         "riders": round(riders, 2),
         "total_delivery": round(total, 2),
         "delivery_per_kwh": round(total / kwh, 5) if kwh else None,
+        "capacity_kw_day": float(r.get("capacity_kw_day") or 0.0),
+        "summer_months": sorted(summer_months),
     }
 
 
@@ -378,6 +479,12 @@ def refresh_from_urdb(
         if not spec:
             report.append({"zone": zone, "status": "no URDB mapping"})
             continue
+        # Don't let a coarse URDB pull overwrite a hand-verified filed-tariff row
+        # (URDB has no summer/winter split or capacity, so it would be a downgrade).
+        cur = df[df["zone"] == zone]
+        if not cur.empty and str(cur.iloc[0].get("verified", "")).startswith("filed"):
+            report.append({"zone": zone, "status": "skipped — filed-tariff row kept"})
+            continue
         rows: list[dict] = []
         for sector in ("Commercial", "Industrial"):
             try:
@@ -404,7 +511,10 @@ def refresh_from_urdb(
         df.loc[mask, "edc"] = spec["utility"]
         df.loc[mask, "rate_class"] = chosen.get("name")
         df.loc[mask, "customer_charge_month"] = round(fixed, 2)
-        df.loc[mask, "dist_demand_kw_month"] = round(demand, 4)
+        # URDB exposes a single max demand charge, not a summer/winter split, so
+        # write it to both seasons (no seasonality captured).
+        df.loc[mask, "dist_demand_summer_kw_month"] = round(demand, 4)
+        df.loc[mask, "dist_demand_winter_kw_month"] = round(demand, 4)
         df.loc[mask, "dist_energy_kwh"] = round(energy, 5)
         df.loc[mask, "verified"] = "urdb-bundled" if bundled else "urdb"
         df.loc[mask, "source"] = f"URDB: {chosen.get('name')} ({chosen.get('uri','')})"

@@ -48,7 +48,7 @@ st.info(
     icon="ℹ️")
 
 drates = delivery.load()
-del_zones = drates["zone"].tolist()
+del_zones = sorted(drates["zone"].unique().tolist())
 
 # ── Inputs ────────────────────────────────────────────────────────────────
 with st.container(border=True):
@@ -56,6 +56,17 @@ with st.container(border=True):
     with c1:
         zone = st.selectbox("PJM zone", del_zones,
                             index=del_zones.index("DOM") if "DOM" in del_zones else 0)
+        # A zone can carry several filed rate schedules (voltage tiers) — let the
+        # user pick when more than one exists (e.g. PSE&G LPL-Primary vs HTS).
+        _zone_rows = drates[drates["zone"] == zone]
+        rate_class = None
+        if len(_zone_rows) > 1:
+            _classes = _zone_rows["rate_class"].tolist()
+            rate_class = st.selectbox(
+                "Rate schedule / voltage", _classes, index=0,
+                help="Filed rate schedule for this zone. Higher-voltage classes "
+                     "(subtransmission / transmission) carry lower $/kW demand but "
+                     "higher fixed charges — pick the one the customer takes service on.")
         kwh = st.number_input("Monthly usage (kWh)", min_value=0.0,
                               value=1_000_000.0, step=50_000.0, format="%.0f")
     with c2:
@@ -107,29 +118,98 @@ with st.container(border=True):
                                      index=0 if dy_options else None)
         lda = "DOM" if zone == "DOM" else "RTO"
 
-# ── Compose the bill ──────────────────────────────────────────────────────
-# If the delivery tariff is bundled (URDB had no unbundled class), its per-kWh
-# charge already includes generation — don't add LMP energy on top.
-is_bundled = str(delivery.rate_for(zone).get("verified", "")).endswith("bundled")
-energy_cost = 0.0 if is_bundled else energy_price * (kwh / 1000.0)  # $/MWh × MWh
-
-days = calendar.monthrange(2026, month)[1]
-cap_price = capacity.price_for(delivery_year, lda) if delivery_year else None
-cap_cost = (cap_price * plc_mw * days) if cap_price is not None else 0.0
-
+# ── Delivery (needs the billing month to pick the summer vs winter demand rate) ─
 deliv = delivery.estimate_delivery(zone, kwh=kwh, billing_demand_kw=peak_kw,
-                                   nspl_kw=nspl_kw)
+                                   nspl_kw=nspl_kw, month=month, rate_class=rate_class)
 if deliv is None:
     st.error(f"No delivery tariff for zone {zone}.")
     st.stop()
 
+days = calendar.monthrange(2026, month)[1]
+plc_kw = plc_mw * 1000.0
+ciep_kw_day = float(deliv.get("capacity_kw_day") or 0.0)
+
+# ── Capacity billing ───────────────────────────────────────────────────────
+# How PJM generation capacity reaches the customer depends on the tariff:
+#
+#   • BGS/CIEP states (all of NJ) bill it YEAR-ROUND as $/kW-day on the PLC tag.
+#     The summer seasonality lives in the delivery DEMAND charge, not here. When
+#     the delivery row carries a filed ``capacity_kw_day``, use it directly.
+#
+#   • Otherwise fall back to the RPM table, with an optional summer-only
+#     capacity-demand-charge treatment for tariffs that recover it that way.
+SUMMER_WINDOWS = {"Jun–Sept": (6, 7, 8, 9), "May–Sept": (5, 6, 7, 8, 9),
+                  "Jun–Oct": (6, 7, 8, 9, 10)}
+_dy_price = capacity.price_for(delivery_year, lda) if delivery_year else None
+with st.container(border=True):
+    st.subheader("Capacity billing")
+    if ciep_kw_day > 0:
+        cap_cost = ciep_kw_day * plc_kw * days
+        cap_label = f"Capacity — BGS-CIEP ({zone})"
+        _cap_note = (f"Capacity: BGS-CIEP ${ciep_kw_day:,.5f}/kW-day × {plc_kw:,.0f} kW "
+                     f"PLC × {days} days = year-round on the capacity tag.")
+        st.caption(
+            f"✅ **{deliv['edc']}** bills generation capacity as **BGS-CIEP: "
+            f"${ciep_kw_day:,.5f}/kW-day on the PLC tag, every day of the year**. "
+            f"The summer premium is in the **distribution demand** charge, not here. "
+            f"(This zone's filed rate overrides the RPM table.)")
+    else:
+        method = st.radio(
+            "How does this tariff bill PJM capacity?",
+            ["Summer capacity demand charge ($/kW-month, summer only)",
+             "Year-round installments ($/MW-day × days, all 12 months)"],
+            index=1,
+            help="**Summer capacity demand charge** — some EDC tariffs recover the "
+                 "annual RPM cost through a $/kW demand charge on the capacity tag "
+                 "(PLC), billed only in the summer window. **Year-round installments** "
+                 "— the straight wholesale pass-through: PLC × $/MW-day × days, every "
+                 "month (June–May). NJ zones use neither — see BGS-CIEP above.")
+        summer_only = method.startswith("Summer")
+        cb1, cb2 = st.columns(2)
+        window_label = cb1.selectbox(
+            "Summer window", list(SUMMER_WINDOWS), index=0, disabled=not summer_only,
+            help="The months your tariff assesses the summer capacity demand charge.")
+        summer_months = set(SUMMER_WINDOWS[window_label])
+        _auto_rate = ((_dy_price * 365.0 / 1000.0) / len(summer_months)
+                      if _dy_price and summer_only else 0.0)
+        cap_rate_kw = cb2.number_input(
+            "Summer capacity demand rate ($/kW-month)", min_value=0.0,
+            value=round(_auto_rate, 2), step=0.5, format="%.2f", disabled=not summer_only,
+            help=(f"Applied to your capacity tag (PLC = {plc_kw:,.0f} kW) each summer "
+                  f"month. Default derives from RPM {lda} (${_dy_price:,.2f}/MW-day × "
+                  f"365 ÷ 1000 ÷ {len(summer_months)} months); replace with your "
+                  f"filed rate." if _dy_price else "Enter the $/kW-month filed rate."))
+        cap_label = (f"Capacity — summer demand charge ({lda})" if summer_only
+                     else f"Capacity (RPM {lda})")
+        if summer_only and month in summer_months:
+            cap_cost = cap_rate_kw * plc_kw
+            _cap_note = (f"Capacity: summer demand charge ${cap_rate_kw:,.2f}/kW-month × "
+                         f"{plc_kw:,.0f} kW PLC ({window_label}).")
+        elif summer_only:
+            cap_cost = 0.0
+            _cap_note = (f"Capacity: $0 — summer-only ({window_label}); "
+                         f"{calendar.month_name[month]} is outside the window.")
+        elif _dy_price is not None:
+            cap_cost = _dy_price * plc_mw * days
+            _cap_note = (f"Capacity: {lda} @ ${_dy_price:,.2f}/MW-day × {plc_mw:.3f} MW × "
+                         f"{days} days (year-round installment, June–May).")
+        else:
+            cap_cost = 0.0
+            _cap_note = "Capacity price unavailable."
+
+# ── Compose the bill ──────────────────────────────────────────────────────
+# If the delivery tariff is bundled (URDB had no unbundled class), its per-kWh
+# charge already includes generation — don't add LMP energy on top.
+is_bundled = str(deliv.get("verified", "")).endswith("bundled")
+energy_cost = 0.0 if is_bundled else energy_price * (kwh / 1000.0)  # $/MWh × MWh
 energy_label = ("Energy (bundled in delivery)" if is_bundled
                 else "Energy (supply)")
+_season = deliv.get("demand_season", "winter")
 rows = [
     (energy_label,                 "Supply",   energy_cost),
-    (f"Capacity (RPM {lda})",      "Supply",   cap_cost),
+    (cap_label,                    "Supply",   cap_cost),
     ("Customer charge",            "Delivery", deliv["customer_charge"]),
-    ("Distribution demand",        "Delivery", deliv["distribution_demand"]),
+    (f"Distribution demand ({_season})", "Delivery", deliv["distribution_demand"]),
     ("Transmission (NITS)",        "Delivery", deliv["transmission_demand_nits"]),
     ("Distribution energy",        "Delivery", deliv["distribution_energy"]),
     ("Riders",                     "Delivery", deliv["riders"]),
@@ -162,6 +242,13 @@ elif verified == "urdb-bundled":
 elif verified == "urdb":
     st.caption(f"✅ Delivery from URDB: {deliv['rate_class']} — verify NITS "
                "(transmission) separately; it's a manual estimate.")
+elif verified.startswith("filed"):
+    _rate = deliv.get("demand_rate_kw")
+    st.caption(
+        f"✅ **{deliv['edc']}** — {deliv['rate_class']} — from the filed tariff "
+        f"({verified}). Distribution demand this month ({calendar.month_name[month]}, "
+        f"{deliv.get('demand_season')}): **${_rate:,.4f}/kW**. "
+        f"Source: {deliv.get('source')}")
 
 # ── Breakdown ─────────────────────────────────────────────────────────────
 c_left, c_right = st.columns([3, 2])
@@ -186,9 +273,7 @@ with c_right:
             "¢/kWh": st.column_config.NumberColumn(format="%.3f ¢"),
         },
     )
-    st.caption(f"Capacity: {lda} @ "
-               f"${cap_price:,.2f}/MW-day × {plc_mw:.3f} MW × {days} days"
-               if cap_price is not None else "Capacity price unavailable.")
+    st.caption(_cap_note)
 
 # ── The delivery reference row in play ────────────────────────────────────
 with st.expander("Delivery tariff row used"):
