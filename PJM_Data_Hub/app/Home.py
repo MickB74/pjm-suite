@@ -46,17 +46,21 @@ nav = st.navigation({
         st.Page(f"{P}/2_System_Generation.py", title="System Generation", icon="🔥"),
         st.Page(f"{P}/12_System_Load.py", title="System Load", icon="📈"),
         st.Page(f"{P}/9_Ancillary_Services.py", title="Ancillary Services", icon="🛡️"),
-        st.Page(f"{P}/11_Capacity_RPM.py", title="Capacity (RPM)", icon="🏛️"),
         st.Page(f"{P}/19_Interconnection_Queue.py", title="Interconnection Queue", icon="🔌"),
         st.Page(f"{P}/3_EIA_923.py", title="EIA-923 Generation", icon="📅"),
     ],
-    "Analyze": [
-        st.Page(f"{P}/4_Price_Forecast.py", title="Price Forecast", icon="📉"),
-        st.Page(f"{P}/10_Peak_Day_Analysis.py", title="Peak Day Analysis", icon="⛰️"),
+    # Weather → peaks → capacity obligation → cost: one workflow, one group.
+    "Capacity & Peaks": [
         st.Page(f"{P}/14_Coincident_Peaks.py", title="5CP & Weather", icon="🌡️"),
         st.Page(f"{P}/20_Degree_Days.py", title="Degree Days (HDD/CDD)", icon="🌤️"),
+        st.Page(f"{P}/10_Peak_Day_Analysis.py", title="Peak Day Analysis", icon="⛰️"),
         st.Page(f"{P}/16_Peak_Predictor.py", title="5CP Peak Predictor", icon="🔮"),
+        st.Page(f"{P}/11_Capacity_RPM.py", title="Capacity (RPM)", icon="🏛️"),
+        st.Page(f"{P}/21_Hub_Futures.py", title="Hub Forward Curve", icon="📈"),
         st.Page(f"{P}/17_PLC_Calculator.py", title="PLC Cost Calculator", icon="🧮"),
+    ],
+    "Analyze": [
+        st.Page(f"{P}/4_Price_Forecast.py", title="Price Forecast", icon="📉"),
         st.Page(f"{P}/6_DART_Spread.py", title="DA–RT Spread", icon="⚖️"),
         st.Page(f"{P}/8_Hub_Basis.py", title="Hub Basis", icon="🧭"),
         st.Page(f"{P}/7_Capture_Price.py", title="Capture Price", icon="🎯"),

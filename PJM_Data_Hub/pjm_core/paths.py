@@ -95,11 +95,18 @@ GAS_STRIP_CSV = GAS_DIR / "henry_hub_nymex_strip.csv"
 GAS_OVERRIDE_CSV = GAS_DIR / "gas_price_override.csv"
 GAS_STRIP_STATE = GAS_DIR / ".last_update.json"
 
+# PJM Western Hub forward curve (exchange-traded power futures). No free API:
+# user-maintained reference CSV seeded in futures.py, with a best-effort CME
+# settlements scraper that refreshes it and falls back to the CSV on failure.
+FUTURES_DIR = DATA / "futures"
+FUTURES_CSV = FUTURES_DIR / "pjm_wh_forward_curve.csv"
+FUTURES_STATE = FUTURES_DIR / ".last_update.json"
+
 _ALL_DIRS = [
     DATA, HUB_PRICES_DIR, ZONE_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
     EIA860_DIR, EIA860_RAW_DIR,
     PRICE_FORECAST_DIR, ANCILLARY_DIR, LOAD_DIR, CAPACITY_DIR, WEATHER_DIR,
-    DELIVERY_DIR, DELIVERY_URDB_RAW_DIR, QUEUE_DIR, GAS_DIR,
+    DELIVERY_DIR, DELIVERY_URDB_RAW_DIR, QUEUE_DIR, GAS_DIR, FUTURES_DIR,
     CSV_EXPORTS_DIR, LOGS_DIR,
 ]
 
