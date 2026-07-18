@@ -143,23 +143,92 @@ for col, (_, row) in zip(cols, latest.iterrows()):
 # --- Capacity-cost calculator ------------------------------------------------
 st.divider()
 st.subheader("Capacity cost calculator")
-st.caption("Estimate the annual capacity charge for a peak-load (obligation) MW "
-           "amount. Capacity Obligation ≈ your coincident peak × zonal scaling "
-           "factors — use your actual UCAP obligation for precision.")
-c1, c2, c3 = st.columns(3)
-mw = c1.number_input("Obligation (MW)", min_value=0.0, value=100.0, step=10.0)
-dy = c2.selectbox("Delivery year", sorted(df["delivery_year"].unique(), reverse=True))
-lda = c3.selectbox("LDA", sorted(df[df["delivery_year"] == dy]["lda"].unique()))
+st.caption("Enter your obligation once, then see the annual capacity charge for "
+           "that MW across every delivery year — and compare specific years "
+           "head-to-head. Capacity Obligation ≈ your coincident peak × zonal "
+           "scaling factors; use your actual UCAP obligation for precision.")
 
-price = capacity.price_for(dy, lda)
-if price is not None:
-    annual = price * mw * 365.0
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Clearing price", f"${price:,.2f} /MW-day")
-    m2.metric("Daily cost", f"${price*mw:,.0f}")
-    m3.metric("Annual capacity cost", f"${annual:,.0f}")
+cc1, cc2 = st.columns([1, 1])
+mw = cc1.number_input("Obligation (MW)", min_value=0.0, value=100.0, step=10.0)
+lda = cc2.selectbox("LDA", ldas, index=ldas.index("RTO") if "RTO" in ldas else 0)
+
+# Cost series for this MW & LDA across every delivery year. Where the chosen LDA
+# didn't separate in a given year, price_for() falls back to the RTO price.
+cost_rows = []
+for yr in years_sorted:
+    p = capacity.price_for(yr, lda)
+    if p is not None:
+        cost_rows.append({
+            "delivery_year": yr,
+            "clearing_price_mw_day": p,
+            "daily_cost": p * mw,
+            "annual_cost": p * mw * 365.0,
+        })
+cost_df = pd.DataFrame(cost_rows)
+
+if cost_df.empty:
+    st.warning("No clearing prices available for that LDA.")
 else:
-    st.warning("No clearing price for that delivery year / LDA.")
+    # Headline metrics for this MW/LDA profile: latest, cheapest, priciest year.
+    latest_row = cost_df.iloc[-1]
+    cheap_row = cost_df.loc[cost_df["annual_cost"].idxmin()]
+    peak_row = cost_df.loc[cost_df["annual_cost"].idxmax()]
+    k1, k2, k3 = st.columns(3)
+    k1.metric(f"Latest · {latest_row['delivery_year']}",
+              f"${latest_row['annual_cost']:,.0f}/yr",
+              help=f"${latest_row['clearing_price_mw_day']:,.2f}/MW-day")
+    k2.metric(f"Cheapest · {cheap_row['delivery_year']}",
+              f"${cheap_row['annual_cost']:,.0f}/yr",
+              help=f"${cheap_row['clearing_price_mw_day']:,.2f}/MW-day")
+    k3.metric(f"Most expensive · {peak_row['delivery_year']}",
+              f"${peak_row['annual_cost']:,.0f}/yr",
+              help=f"${peak_row['clearing_price_mw_day']:,.2f}/MW-day")
+
+    # Annual bill over time for the chosen obligation & LDA.
+    fig_cost = px.bar(
+        cost_df, x="delivery_year", y="annual_cost",
+        category_orders={"delivery_year": years_sorted},
+        labels={"delivery_year": "Delivery year",
+                "annual_cost": "Annual capacity cost ($)"},
+        title=f"Annual capacity bill for {mw:,.0f} MW in {lda} — by delivery year")
+    fig_cost.update_traces(hovertemplate="%{x}<br>$%{y:,.0f}/yr<extra></extra>")
+    fig_cost.update_layout(height=380, margin=dict(t=40), yaxis_tickprefix="$")
+    st.plotly_chart(fig_cost, use_container_width=True)
+
+    # Head-to-head comparison of specific delivery years.
+    st.markdown("**Compare specific delivery years**")
+    cmp_years = st.multiselect(
+        "Delivery years to compare", years_sorted,
+        default=[years_sorted[0], years_sorted[-1]], key="cap_cmp_years")
+    if cmp_years:
+        # cost_df is already in chronological order; isin preserves it, so the
+        # first selected row is the earliest — our comparison baseline.
+        cmp_df = cost_df[cost_df["delivery_year"].isin(cmp_years)]
+        base = cmp_df.iloc[0]
+        mcols = st.columns(len(cmp_df))
+        for col, (_, r) in zip(mcols, cmp_df.iterrows()):
+            is_base = r["delivery_year"] == base["delivery_year"]
+            delta = r["annual_cost"] - base["annual_cost"]
+            pct = (delta / base["annual_cost"] * 100.0) if base["annual_cost"] else 0.0
+            col.metric(
+                r["delivery_year"], f"${r['annual_cost']:,.0f}/yr",
+                delta=None if is_base else f"{delta:+,.0f} ({pct:+.0f}%)",
+                delta_color="inverse",  # higher cost = worse
+                help=f"${r['clearing_price_mw_day']:,.2f}/MW-day · "
+                     f"${r['daily_cost']:,.0f}/day")
+        st.caption(f"Δ shown vs baseline **{base['delivery_year']}** "
+                   "(earliest selected year).")
+
+        cmp_show = cmp_df.rename(columns={
+            "delivery_year": "Delivery year",
+            "clearing_price_mw_day": "$/MW-day",
+            "daily_cost": "Daily cost",
+            "annual_cost": "Annual cost"})
+        st.dataframe(
+            cmp_show.style.format({
+                "$/MW-day": "${:,.2f}", "Daily cost": "${:,.0f}",
+                "Annual cost": "${:,.0f}"}),
+            use_container_width=True, hide_index=True)
 
 # Reference table + download.
 st.subheader("Reference table")
