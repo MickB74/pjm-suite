@@ -19,7 +19,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from pjm_core import paths, capacity
+from pjm_core import paths, capacity, prices as PX
 
 st.title("🏛️ PJM Capacity Market (RPM)")
 st.caption("Reliability Pricing Model Base Residual Auction clearing prices "
@@ -205,19 +205,35 @@ else:
         # first selected row is the earliest — our comparison baseline.
         cmp_df = cost_df[cost_df["delivery_year"].isin(cmp_years)]
         base = cmp_df.iloc[0]
-        mcols = st.columns(len(cmp_df))
-        for col, (_, r) in zip(mcols, cmp_df.iterrows()):
-            is_base = r["delivery_year"] == base["delivery_year"]
-            delta = r["annual_cost"] - base["annual_cost"]
-            pct = (delta / base["annual_cost"] * 100.0) if base["annual_cost"] else 0.0
-            col.metric(
-                r["delivery_year"], f"${r['annual_cost']:,.0f}/yr",
-                delta=None if is_base else f"{delta:+,.0f} ({pct:+.0f}%)",
-                delta_color="inverse",  # higher cost = worse
-                help=f"${r['clearing_price_mw_day']:,.2f}/MW-day · "
-                     f"${r['daily_cost']:,.0f}/day")
+
+        # Compact metric cards. st.metric squeezes badly past ~6 columns, so we
+        # wrap into rows of PER_ROW and shrink the value/label/delta fonts so
+        # dollar figures stay legible even when every delivery year is selected.
+        PER_ROW = 6
+        st.markdown(
+            """<style>
+            [data-testid="stMetricValue"] { font-size: 0.95rem; }
+            [data-testid="stMetricLabel"] p { font-size: 0.72rem; }
+            [data-testid="stMetricDelta"] { font-size: 0.68rem; }
+            [data-testid="stMetricDelta"] svg { display: none; }
+            </style>""",
+            unsafe_allow_html=True)
+        rows_of = [cmp_df.iloc[i:i + PER_ROW] for i in range(0, len(cmp_df), PER_ROW)]
+        for chunk in rows_of:
+            mcols = st.columns(PER_ROW)
+            for col, (_, r) in zip(mcols, chunk.iterrows()):
+                is_base = r["delivery_year"] == base["delivery_year"]
+                delta = r["annual_cost"] - base["annual_cost"]
+                pct = (delta / base["annual_cost"] * 100.0) if base["annual_cost"] else 0.0
+                col.metric(
+                    r["delivery_year"], f"${r['annual_cost']:,.0f}",
+                    delta=None if is_base else f"{delta:+,.0f} ({pct:+.0f}%)",
+                    delta_color="inverse",  # higher cost = worse
+                    help=f"${r['clearing_price_mw_day']:,.2f}/MW-day · "
+                         f"${r['daily_cost']:,.0f}/day · "
+                         f"${r['annual_cost']:,.0f}/yr")
         st.caption(f"Δ shown vs baseline **{base['delivery_year']}** "
-                   "(earliest selected year).")
+                   "(earliest selected year). Annual $ obligation shown per card.")
 
         # Chart the selected years head-to-head, ordered chronologically.
         fig_cmp = px.bar(
@@ -244,6 +260,144 @@ else:
                 "$/MW-day": "${:,.2f}", "Daily cost": "${:,.0f}",
                 "Annual cost": "${:,.0f}"}),
             use_container_width=True, hide_index=True)
+
+# --- All-in cost of power by year (2020–2026) --------------------------------
+# Capacity is only one slice of the bill. Stack it with the *actual* energy
+# (commodity) and ancillary costs from the local PJM price stores — which cover
+# calendar years 2020–2026 — to show the all-in cost of holding a MW position.
+st.divider()
+st.subheader("All-in cost of power by year (2020–2026)")
+
+HOURS_PER_YEAR = 8760.0
+_ALLIN_YEARS = list(range(2020, 2027))
+
+
+@st.cache_data(show_spinner=False)
+def _hub_options() -> list[str]:
+    try:
+        p = PX.load_hub_prices(market="RT")
+        return sorted(p["pnode_name"].dropna().unique()) if "pnode_name" in p.columns else []
+    except Exception:
+        return []
+
+
+@st.cache_data(show_spinner=False)
+def _annual_energy_lmp(hub: str) -> dict:
+    """Calendar-year mean total LMP ($/MWh) for one hub, from the price store."""
+    try:
+        p = PX.load_hub_prices(market="RT")
+    except Exception:
+        return {}
+    if p.empty or "pnode_name" not in p.columns:
+        return {}
+    pc = "total_lmp" if "total_lmp" in p.columns else "lmp"
+    p = p[p["pnode_name"] == hub].copy()
+    if p.empty:
+        return {}
+    dt = pd.to_datetime(p["datetime_beginning_ept"])
+    return (pd.to_numeric(p[pc], errors="coerce")
+            .groupby(dt.dt.year).mean().to_dict())
+
+
+@st.cache_data(show_spinner=False)
+def _annual_ancillary_adder() -> dict:
+    """Ancillary cost as a $/MWh-of-load adder = spend ÷ system load, by year.
+
+    Spend ≈ Σ(clearing price × cleared MW) over services & hours; load = system
+    MWh. The 2022 step-up is real — PJM's Oct-2022 reserve price-formation reform.
+    """
+    try:
+        from datasets.ancillary import pjm_as
+        from datasets.load import pjm_load
+        a = pjm_as.load_store()
+        L = pjm_load.load_store()
+    except Exception:
+        return {}
+    if a.empty or L.empty:
+        return {}
+    mw_col = "as_mw" if "as_mw" in a.columns else "total_mw"
+    spend = ((pd.to_numeric(a["mcp"], errors="coerce")
+              * pd.to_numeric(a[mw_col], errors="coerce"))
+             .groupby(pd.to_datetime(a["datetime_beginning_ept"]).dt.year).sum())
+    load_mwh = (pd.to_numeric(L["mw"], errors="coerce")
+                .groupby(pd.to_datetime(L["datetime_beginning_ept"]).dt.year).sum())
+    return {int(y): float(spend[y] / load_mwh[y])
+            for y in spend.index if y in load_mwh.index and load_mwh[y]}
+
+
+def _cap_cost_for_year(y: int, mw_: float, lda_: str = "RTO") -> float | None:
+    """Annual capacity $ during calendar year y, blending the two overlapping RPM
+    delivery years (Jan–May = 151 days of DY (y-1)/y; Jun–Dec = 214 of y/(y+1))."""
+    p_early = capacity.price_for(f"{y-1}/{y}", lda_)
+    p_late = capacity.price_for(f"{y}/{y+1}", lda_)
+    if p_early is not None and p_late is not None:
+        return mw_ * (151.0 * p_early + 214.0 * p_late)
+    if p_late is not None:
+        return mw_ * 365.0 * p_late
+    if p_early is not None:
+        return mw_ * 365.0 * p_early
+    return None
+
+
+hub_opts = _hub_options()
+if not hub_opts:
+    st.info("Energy/ancillary price stores are empty — run **API Keys → Update "
+            "Hub Prices** (and ancillary) to populate the all-in cost view.")
+else:
+    st.caption("Stacks the RPM **capacity** charge with the **actual energy "
+               "(commodity)** and **ancillary** costs of a MW position. Energy & "
+               "ancillary come from the local PJM stores (2020–2026); earlier RPM "
+               "years aren't shown — no market energy data exists for them.")
+    a1, a2, a3 = st.columns(3)
+    allin_mw = a1.number_input("Position (MW)", min_value=0.0, value=float(mw),
+                               step=10.0, key="allin_mw")
+    lf = a2.slider("Load factor", 0.10, 1.00, 0.60, 0.05, key="allin_lf",
+                   help="Share of the year the MW draws energy. MWh = MW × 8,760 "
+                        "× load factor. 100 MW @ 60% ≈ 525,600 MWh/yr.")
+    default_hub = "WESTERN HUB" if "WESTERN HUB" in hub_opts else hub_opts[0]
+    hub = a3.selectbox("Energy hub (commodity)", hub_opts,
+                       index=hub_opts.index(default_hub), key="allin_hub")
+
+    energy = _annual_energy_lmp(hub)
+    anc = _annual_ancillary_adder()
+    mwh = allin_mw * HOURS_PER_YEAR * lf
+
+    allin = pd.DataFrame([{
+        "Year": str(y),
+        "Capacity": _cap_cost_for_year(y, allin_mw) or 0.0,
+        "Commodity (energy)": (energy.get(y) or 0.0) * mwh,
+        "Ancillary": (anc.get(y) or 0.0) * mwh,
+    } for y in _ALLIN_YEARS])
+    allin["Total"] = allin[["Capacity", "Commodity (energy)", "Ancillary"]].sum(axis=1)
+
+    comp_order = ["Commodity (energy)", "Capacity", "Ancillary"]
+    long = allin.melt(id_vars="Year", value_vars=comp_order,
+                      var_name="Component", value_name="Cost")
+    fig_allin = px.bar(
+        long, x="Year", y="Cost", color="Component", barmode="stack",
+        category_orders={"Year": [str(y) for y in _ALLIN_YEARS],
+                         "Component": comp_order},
+        labels={"Cost": "Annual cost ($)"},
+        title=f"All-in annual cost for {allin_mw:,.0f} MW @ {lf:.0%} load factor — {hub}")
+    fig_allin.update_traces(
+        hovertemplate="%{x} · %{fullData.name}<br>$%{y:,.0f}<extra></extra>")
+    fig_allin.update_layout(height=430, margin=dict(t=40), yaxis_tickprefix="$",
+                            legend_title_text="")
+    st.plotly_chart(fig_allin, use_container_width=True)
+    st.caption(f"Energy & ancillary applied to **{mwh:,.0f} MWh/yr** "
+               f"(= {allin_mw:,.0f} MW × 8,760 h × {lf:.0%}). **2026 is "
+               "year-to-date** (partial). Ancillary = PJM reserve/regulation spend "
+               "÷ system load; the 2022 step-up reflects PJM's reserve "
+               "price-formation reform.")
+
+    show = allin.copy()
+    show["All-in $/MWh"] = (allin["Total"] / mwh) if mwh else float("nan")
+    st.dataframe(
+        show.style.format({
+            "Capacity": "${:,.0f}", "Commodity (energy)": "${:,.0f}",
+            "Ancillary": "${:,.0f}", "Total": "${:,.0f}",
+            "All-in $/MWh": "${:,.2f}"}),
+        use_container_width=True, hide_index=True)
 
 # Reference table + download.
 st.subheader("Reference table")
