@@ -159,7 +159,10 @@ def _gas_from_yahoo(horizon_months: int, asof: pd.Timestamp) -> pd.Series:
     months = pd.date_range(start, periods=n, freq="MS")
     tk_map = {f"NG{_YF_MONTH_CODE[m.month]}{str(m.year)[2:]}.NYM": m for m in months}
     try:
-        data = yf.download(list(tk_map), period="7d", progress=False, threads=True)
+        # timeout caps the per-request socket wait so a stalled/rate-limited
+        # Yahoo can't hang the caller (this runs at launch and per-request).
+        data = yf.download(list(tk_map), period="7d", progress=False,
+                           threads=True, timeout=8)
     except Exception:
         return pd.Series(dtype=float)
     if data is None or len(data) == 0:

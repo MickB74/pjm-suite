@@ -58,6 +58,12 @@ def _hours_since_last_refresh() -> float | None:
     return age_s / 3600.0
 
 
+def auto_refresh_active(st_obj) -> bool:
+    """True while a refresh is mid-flight (driven across reruns). Home uses this
+    to keep pumping the state machine regardless of the auto_refresh setting."""
+    return bool(st_obj.session_state.get("_ar_active"))
+
+
 def auto_refresh(st_obj, *, force: bool = False) -> None:
     """Incrementally refresh all live datasets when the app opens.
 
@@ -67,16 +73,25 @@ def auto_refresh(st_obj, *, force: bool = False) -> None:
     everything and get rate-limited by PJM. Each dataset updates independently;
     a failure in one is surfaced but never blocks the app or the others. Updates
     are incremental, so when the store is already current this is quick.
-    """
-    import importlib
 
-    if not force and st_obj.session_state.get("_auto_refreshed"):
+    Rather than blocking on a single synchronous loop, the refresh is driven
+    one dataset per rerun so a **Skip** button stays live between steps — the
+    user can bail out and start using the app without waiting for every pull.
+    """
+    ss = st_obj.session_state
+
+    # Already refreshing? Just pump the next step.
+    if ss.get("_ar_active"):
+        _drive_auto_refresh(st_obj)
         return
-    st_obj.session_state["_auto_refreshed"] = True
+
+    if not force and ss.get("_auto_refreshed"):
+        return
 
     if not force:
         hrs = _hours_since_last_refresh()
         if hrs is not None and hrs < _AUTO_REFRESH_MIN_INTERVAL_HOURS:
+            ss["_auto_refreshed"] = True
             return  # refreshed recently — nothing to do
 
     from pjm_core import credentials
@@ -84,36 +99,114 @@ def auto_refresh(st_obj, *, force: bool = False) -> None:
     cfg = credentials.load_config()
     have_pjm = credentials.have_credentials(cfg)
 
-    updated_any = False
-    with st_obj.status("🔄 Refreshing PJM data…", expanded=False) as status:
-        if not have_pjm:
-            status.write(
+    # Kick off a fresh run: queue up the tasks and drive the first step.
+    ss.pop("_ar_start_requested", None)
+    ss["_ar_active"] = True
+    ss["_ar_have_pjm"] = have_pjm
+    ss["_ar_queue"] = [t for t in _AUTO_REFRESH_TASKS if not (t[3] and not have_pjm)]
+    ss["_ar_log"] = []
+    ss["_ar_updated"] = False
+    ss.pop("_ar_skip", None)
+    _drive_auto_refresh(st_obj)
+
+
+def _drive_auto_refresh(st_obj) -> None:
+    """Process one queued dataset, then rerun so the Skip button stays live."""
+    import importlib
+
+    ss = st_obj.session_state
+    status = st_obj.status("🔄 Refreshing PJM data…", expanded=True)
+    with status:
+        if not ss.get("_ar_have_pjm"):
+            st_obj.write(
                 "⚠️ No PJM subscription key yet — set one on the **API Keys** page "
                 "to auto-refresh prices, ancillary, and load.")
-        for label, module_path, fn_name, needs_key in _AUTO_REFRESH_TASKS:
-            if needs_key and not have_pjm:
-                continue
-            try:
-                status.write(f"⏳ {label}…")
-                fn = getattr(importlib.import_module(module_path), fn_name)
-                result = fn()
-                rows = result.get("rows") if isinstance(result, dict) else None
-                status.write(f"✅ {label}" + (f" — {rows:,} rows" if rows is not None else " done"))
-                updated_any = True
-            except Exception as e:  # noqa: BLE001 — never let one dataset break app open
-                status.write(f"❌ {label}: {e}")
+        for line in ss.get("_ar_log", []):
+            st_obj.write(line)
+
+        # Resolve terminal states first so the Skip button never lingers on the
+        # final "done" frame.
+        if ss.get("_ar_skip"):
+            _finish_auto_refresh(st_obj, status, skipped=True)
+            return
+
+        queue = ss.get("_ar_queue", [])
+        if not queue:
+            _finish_auto_refresh(st_obj, status, skipped=False)
+            return
+
+        # Still work to do — offer Skip. A click lands on the next rerun; we set
+        # the flag and rerun so the pending dataset is left un-pulled.
+        if st_obj.button("⏭️ Skip refresh", key="_ar_skip_btn",
+                         help="Stop refreshing and use the app now. "
+                              "The remaining datasets keep whatever they had."):
+            ss["_ar_skip"] = True
+            st_obj.rerun()
+
+        label, module_path, fn_name, _needs_key = queue[0]
+        st_obj.write(f"⏳ {label}…")
+        try:
+            fn = getattr(importlib.import_module(module_path), fn_name)
+            result = fn()
+            rows = result.get("rows") if isinstance(result, dict) else None
+            ss["_ar_log"].append(
+                f"✅ {label}" + (f" — {rows:,} rows" if rows is not None else " done"))
+            ss["_ar_updated"] = True
+        except Exception as e:  # noqa: BLE001 — never let one dataset break app open
+            ss["_ar_log"].append(f"❌ {label}: {e}")
+        ss["_ar_queue"] = queue[1:]
+
+    st_obj.rerun()
+
+
+def _finish_auto_refresh(st_obj, status, *, skipped: bool) -> None:
+    ss = st_obj.session_state
+    if skipped:
+        status.update(label="⏭️ Refresh skipped — using existing data",
+                      state="complete")
+    else:
+        # Stamp the marker so a tab reload within the interval skips the refresh.
+        try:
+            _auto_refresh_marker().touch()
+        except OSError:
+            pass
         status.update(label="✅ Data up to date", state="complete")
 
-    # Stamp the marker so a tab reload within the interval skips the refresh.
-    try:
-        _auto_refresh_marker().touch()
-    except OSError:
-        pass
+    updated = ss.get("_ar_updated")
+    ss["_auto_refreshed"] = True
+    ss["_ar_active"] = False
+    for k in ("_ar_queue", "_ar_log", "_ar_updated", "_ar_have_pjm", "_ar_skip"):
+        ss.pop(k, None)
 
-    if updated_any:
+    if updated:
         # Screens cache their parquet loads with @st.cache_data; clear so they
         # pick up the freshly written rows on this run.
         st_obj.cache_data.clear()
+
+
+def refresh_prompt(st_obj) -> None:
+    """Render a sidebar refresh control instead of auto-pulling on open.
+
+    Pulling every dataset on app open blocks the first render for a long time
+    (and can hit PJM rate limits). Instead we show the data's freshness in the
+    sidebar and let the user click to refresh when they actually want it. The
+    pull only runs on click, so opening the app is instant.
+    """
+    with st_obj.sidebar:
+        hrs = _hours_since_last_refresh()
+        if hrs is None:
+            st_obj.caption("PJM data: never refreshed this session.")
+        elif hrs < 1:
+            st_obj.caption(f"PJM data refreshed {int(hrs * 60)} min ago.")
+        else:
+            st_obj.caption(f"PJM data last refreshed {hrs:.0f} h ago.")
+        if st_obj.button("🔄 Refresh PJM data", use_container_width=True,
+                         help="Incrementally pull the latest hub prices, ancillary, "
+                              "load, and weather. Runs only when you click."):
+            # Start the skippable refresh; Home drives it (and shows Skip) in the
+            # main area on the next rerun.
+            st_obj.session_state["_ar_start_requested"] = True
+            st_obj.rerun()
 
 
 def rate_explainer(st_obj, *, expanded: bool = False) -> None:

@@ -47,11 +47,12 @@ st.subheader("Data Updates")
 
 auto_on = st.toggle(
     "🔄 Auto-refresh all data when the app opens",
-    value=cfg.get("auto_refresh", True),
-    help="Incrementally pulls the latest hub prices, ancillary, load, and weather "
-         "each time you open the app. Updates are incremental, so it's fast when "
-         "data is already current. The buttons below still work for a manual refresh.")
-if auto_on != cfg.get("auto_refresh", True):
+    value=cfg.get("auto_refresh", False),
+    help="Off by default: opening the app is instant, and you refresh on demand "
+         "with the 🔄 Refresh PJM data button in the sidebar. Turn this on to pull "
+         "the latest hub prices, ancillary, load, and weather automatically each "
+         "time you open the app (this can make the first render slow).")
+if auto_on != cfg.get("auto_refresh", False):
     cfg["auto_refresh"] = auto_on
     credentials.save_config(cfg)
 

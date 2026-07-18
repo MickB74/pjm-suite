@@ -20,11 +20,19 @@ st.set_page_config(page_title="PJM Data Hub", page_icon="⚡", layout="wide",
                    initial_sidebar_state="expanded")
 paths.ensure_dirs()
 
-# Refresh all datasets once per session when the app is opened. Controlled by
-# the "auto_refresh" flag in config (default on); toggle it on the API Keys page.
+# Data refresh is manual by default — pulling everything on open blocks the first
+# render and can hit PJM rate limits. We show a "Refresh PJM data" button in the
+# sidebar instead. Users who want the old behavior can opt in by setting
+# "auto_refresh": true in config (toggle on the API Keys page).
 from pjm_core import credentials  # noqa: E402
-if credentials.load_config().get("auto_refresh", True):
+if _common.auto_refresh_active(st) or st.session_state.get("_ar_start_requested"):
+    # A refresh is already mid-flight (or the sidebar button just asked for one);
+    # keep pumping the state machine so the Skip button stays live.
+    _common.auto_refresh(st, force=True)
+elif credentials.load_config().get("auto_refresh", False):
     _common.auto_refresh(st)
+else:
+    _common.refresh_prompt(st)
 
 P = "screens"
 

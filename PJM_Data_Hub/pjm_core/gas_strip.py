@@ -31,6 +31,19 @@ def load() -> pd.DataFrame | None:
     return pd.read_csv(paths.GAS_STRIP_CSV, parse_dates=["month"])
 
 
+def refreshed_today() -> bool:
+    """True if the cached strip was already pulled today (per its state marker).
+
+    Used to skip the launch-time Yahoo refresh when it's already run once today —
+    the strip only moves on the daily NYMEX settle, so once a day is plenty.
+    """
+    try:
+        state = json.loads(paths.GAS_STRIP_STATE.read_text())
+        return state.get("asof") == pd.Timestamp.now().strftime("%Y-%m-%d")
+    except Exception:
+        return False
+
+
 def update(log=print) -> pd.DataFrame | None:
     """Pull the Yahoo NYMEX strip and write it to GAS_STRIP_CSV.
 
@@ -66,4 +79,11 @@ def update(log=print) -> pd.DataFrame | None:
 
 
 if __name__ == "__main__":
-    update()
+    import sys
+
+    force = "--force" in sys.argv[1:]
+    if not force and refreshed_today():
+        print("Gas strip: already refreshed today; skipping "
+              "(use --force to override).")
+    else:
+        update()
