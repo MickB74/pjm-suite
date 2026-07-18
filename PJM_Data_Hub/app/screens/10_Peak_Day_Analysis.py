@@ -164,6 +164,13 @@ st.dataframe(
                          "peak_value": f"Peak ({unit})", "avg_value": f"Day avg ({unit})"})
     .style.format({f"Peak ({unit})": fmt, f"Day avg ({unit})": fmt}),
     use_container_width=True)
+if unit == "$/MWh":
+    st.caption(
+        "Real-time hourly LMP — PJM's **energy settlement price** at the hub "
+        "(energy + congestion + losses). Real-time leg only (day-ahead settles "
+        "scheduled volume); excludes capacity, transmission & ancillary charges, "
+        "so it is not an all-in delivered cost. Source: PJM Data Miner "
+        "`rt_hrl_lmps`.")
 
 # --- Drill into one peak day ------------------------------------------------
 st.divider()
