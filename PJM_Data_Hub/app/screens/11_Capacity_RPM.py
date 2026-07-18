@@ -219,6 +219,21 @@ else:
         st.caption(f"Δ shown vs baseline **{base['delivery_year']}** "
                    "(earliest selected year).")
 
+        # Chart the selected years head-to-head, ordered chronologically.
+        fig_cmp = px.bar(
+            cmp_df, x="delivery_year", y="annual_cost", color="delivery_year",
+            category_orders={"delivery_year": list(cmp_df["delivery_year"])},
+            labels={"delivery_year": "Delivery year",
+                    "annual_cost": "Annual capacity cost ($)"},
+            title=f"Annual capacity bill for {mw:,.0f} MW in {lda} — "
+                  "selected delivery years")
+        fig_cmp.update_traces(
+            hovertemplate="%{x}<br>$%{y:,.0f}/yr<extra></extra>")
+        fig_cmp.update_layout(
+            height=380, margin=dict(t=40), yaxis_tickprefix="$",
+            showlegend=False)
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
         cmp_show = cmp_df.rename(columns={
             "delivery_year": "Delivery year",
             "clearing_price_mw_day": "$/MW-day",
