@@ -318,18 +318,32 @@ if not gen_day.empty:
     fig2.update_layout(height=360, margin=dict(t=40))
     st.plotly_chart(fig2, use_container_width=True)
 
-    # Fuel mix at the peak hour.
+    # Fuel mix at the peak hour vs. year average.
     peak_gen = gen_day[gen_day["datetime_beginning_ept"] == peak_hour]
     if not peak_gen.empty:
         mixp = (peak_gen[fuel_cols].iloc[0].rename("mw").reset_index()
                 .rename(columns={"index": "fuel"}))
         mixp["share"] = mixp["mw"] / mixp["mw"].sum()
-        st.caption("Fuel mix at the peak hour")
-        st.dataframe(
-            mixp.sort_values("mw", ascending=False).reset_index(drop=True)
-            .rename(columns={"fuel": "Fuel", "mw": "MW", "share": "Share"})
-            .style.format({"MW": "{:,.0f}", "Share": "{:.1%}"}),
-            use_container_width=True, height=300, hide_index=True)
+
+        year_gen = gen_df[
+            (gen_df["datetime_beginning_ept"].dt.date >= start)
+            & (gen_df["datetime_beginning_ept"].dt.date <= end)]
+        if not year_gen.empty:
+            avg = year_gen[fuel_cols].mean().rename("avg_mw").reset_index().rename(
+                columns={"index": "fuel"})
+            avg["avg_share"] = avg["avg_mw"] / avg["avg_mw"].sum()
+            mixp = mixp.merge(avg, on="fuel", how="left")
+
+        show_mix = (mixp.sort_values("mw", ascending=False).reset_index(drop=True)
+                    .rename(columns={"fuel": "Fuel", "mw": "MW", "share": "Share"}))
+        fmt = {"MW": "{:,.0f}", "Share": "{:.1%}"}
+        if "avg_mw" in show_mix.columns:
+            show_mix = show_mix.rename(columns={"avg_mw": "Year Avg MW", "avg_share": "Year Avg Share"})
+            fmt["Year Avg MW"] = "{:,.0f}"
+            fmt["Year Avg Share"] = "{:.1%}"
+        st.caption("Fuel mix at the peak hour vs. selected-period average")
+        st.dataframe(show_mix.style.format(fmt),
+                     use_container_width=True, height=300, hide_index=True)
 
 # Ancillary prices across the peak day.
 as_day = _day_slice(as_df)
