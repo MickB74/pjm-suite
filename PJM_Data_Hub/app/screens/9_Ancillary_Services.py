@@ -85,6 +85,14 @@ if not avg.empty:
     for col, (svc, val) in zip(cols, avg.items()):
         col.metric(f"{svc} avg MCP", f"${val:,.2f}",
                    help=pjm_as.SERVICE_LABELS.get(svc, svc) + " · $/MWh")
+    _zero_products = [s for s in avg.index if avg[s] < 0.01]
+    if _zero_products:
+        _zero_list = ", ".join(_zero_products)
+        st.caption(
+            f"**{_zero_list}** averages ≈ $0 because these reserves rarely bind — "
+            "the supply curve clears at zero in normal conditions. They only price "
+            "during scarcity events (e.g. Winter Storm Elliott, summer peaks), when "
+            "they can spike to the $850/MWh offer cap.")
 
 # --- Daily average MCP by product -------------------------------------------
 daily = (sub.assign(day=sub["datetime_beginning_ept"].dt.date)
