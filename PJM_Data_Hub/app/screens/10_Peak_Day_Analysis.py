@@ -191,14 +191,15 @@ def _day_slice(df, tcol="datetime_beginning_ept"):
 
 # Coincident-peak KPIs at the peak hour.
 st.subheader(f"Coincident peak — {sel_day} {peak_hour.strftime('%H:00')} EPT")
-k = st.columns(5)
+
+_kpi_cards: list[tuple[str, str, str | None]] = []  # (label, value, tooltip)
 
 load_hr = _day_slice(load_df)
 if not load_hr.empty:
     rto_hr = load_hr[(load_hr["zone"] == "RTO") & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
     dom_hr = load_hr[(load_hr["zone"] == "DOM") & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
-    k[0].metric("RTO load @ peak", f"{rto_hr:,.0f} MW" if rto_hr else "—")
-    k[1].metric("DOM load @ peak", f"{dom_hr:,.0f} MW" if dom_hr else "—")
+    _kpi_cards.append(("RTO load", f"{rto_hr:,.0f} MW" if rto_hr else "—", None))
+    _kpi_cards.append(("DOM load", f"{dom_hr:,.0f} MW" if dom_hr else "—", None))
 
 price_hr = _day_slice(prices_df)
 if not price_hr.empty:
@@ -207,22 +208,56 @@ if not price_hr.empty:
                   & (price_hr["market"] == "RT")
                   & (price_hr["datetime_beginning_ept"] == peak_hour)]
     if not ph.empty:
-        k[2].metric(f"{hub_for_price} RT @ peak", f"${ph['total_lmp'].iloc[0]:,.2f}")
+        _hub_short = hub_for_price.replace(" HUB", "").title()
+        _kpi_cards.append((f"{_hub_short} RT LMP", f"${ph['total_lmp'].iloc[0]:,.2f}", None))
 
 as_hr = _day_slice(as_df)
 if not as_hr.empty:
     reg = as_hr[(as_hr["locale"] == "PJM_RTO") & (as_hr["service"] == "REG")
                 & (as_hr["datetime_beginning_ept"] == peak_hour)]
     if not reg.empty:
-        k[3].metric("Regulation MCP @ peak", f"${reg['mcp'].iloc[0]:,.2f}")
+        _kpi_cards.append(("Reg MCP", f"${reg['mcp'].iloc[0]:,.2f}", None))
 
 wx_hr = _day_slice(wx_df)
 if not wx_hr.empty:
     wh = wx_hr[wx_hr["datetime_beginning_ept"] == peak_hour]
     if not wh.empty and pd.notna(wh["apparent_f"].iloc[0]):
-        k[4].metric("PJM apparent temp @ peak", f"{wh['apparent_f'].iloc[0]:.0f} °F",
-                    help=f"Population-weighted heat index · actual {wh['temp_f'].iloc[0]:.0f} °F"
-                         + (f", RH {wh['rh_pct'].iloc[0]:.0f}%" if pd.notna(wh['rh_pct'].iloc[0]) else ""))
+        _wx_tip = f"Population-weighted heat index · actual {wh['temp_f'].iloc[0]:.0f} °F"
+        if pd.notna(wh["rh_pct"].iloc[0]):
+            _wx_tip += f", RH {wh['rh_pct'].iloc[0]:.0f}%"
+        _kpi_cards.append(("Apparent temp", f"{wh['apparent_f'].iloc[0]:.0f} °F", _wx_tip))
+
+if _kpi_cards:
+    _card_css = """
+    <style>
+    .kpi-row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .kpi-card {
+        flex: 1 1 0; min-width: 130px;
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 8px; padding: 0.65rem 0.8rem;
+    }
+    .kpi-label { font-size: 0.72rem; color: rgba(255,255,255,0.55); text-transform: uppercase;
+                 letter-spacing: 0.03em; margin-bottom: 0.2rem; line-height: 1.3; }
+    .kpi-value { font-size: 1.25rem; font-weight: 600; color: rgba(255,255,255,0.92);
+                 white-space: nowrap; }
+    .kpi-tip   { font-size: 0.65rem; color: rgba(255,255,255,0.38); margin-top: 0.15rem; }
+    @media (prefers-color-scheme: light) {
+        .kpi-card { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.10); }
+        .kpi-label { color: rgba(0,0,0,0.50); }
+        .kpi-value { color: rgba(0,0,0,0.85); }
+        .kpi-tip   { color: rgba(0,0,0,0.40); }
+    }
+    </style>
+    """
+    _cards_html = "".join(
+        f'<div class="kpi-card"><div class="kpi-label">{lbl}</div>'
+        f'<div class="kpi-value">{val}</div>'
+        + (f'<div class="kpi-tip">{tip}</div>' if tip else "")
+        + "</div>"
+        for lbl, val, tip in _kpi_cards
+    )
+    st.markdown(_card_css + f'<div class="kpi-row">{_cards_html}</div>', unsafe_allow_html=True)
 
 # Intraday load + price (dual axis).
 load_day = _day_slice(load_df)
