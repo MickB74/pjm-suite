@@ -26,7 +26,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from pjm_core import peak
+from pjm_core import peak, prediction_log
 from datasets.weather import pjm_weather
 
 st.title("🔮 PJM 5CP Peak Predictor")
@@ -89,6 +89,13 @@ if pred.empty:
     st.info("No summer days in the forecast horizon — the 5CP window is "
             "June 1 – Sept 30. Check back in season.")
     st.stop()
+
+# Silently log today's forecast so it can be scored later. Idempotent per day
+# (page refreshes don't double-log). Never fail the render if logging errors.
+try:
+    prediction_log.log_forecast(pred)
+except Exception:
+    pass
 
 # --- Risk table -------------------------------------------------------------
 st.subheader("Next days ranked by 5CP risk")

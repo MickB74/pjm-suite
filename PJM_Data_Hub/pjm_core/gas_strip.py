@@ -69,6 +69,7 @@ def update(log=print) -> pd.DataFrame | None:
     df.to_csv(paths.GAS_STRIP_CSV, index=False)
     paths.GAS_STRIP_STATE.write_text(json.dumps({
         "asof": asof.strftime("%Y-%m-%d"),
+        "last_success": pd.Timestamp.now(tz="UTC").isoformat(),
         "months": len(df),
         "first_month": df["month"].min().strftime("%Y-%m"),
         "last_month": df["month"].max().strftime("%Y-%m"),

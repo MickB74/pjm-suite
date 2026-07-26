@@ -102,12 +102,17 @@ FUTURES_DIR = DATA / "futures"
 FUTURES_CSV = FUTURES_DIR / "pjm_wh_forward_curve.csv"
 FUTURES_STATE = FUTURES_DIR / ".last_update.json"
 
+# Prediction log — each day's 5CP predictor output is appended here so the
+# calls can be scored later against realised daily peaks. See prediction_log.py.
+PREDICTIONS_DIR = DATA / "predictions"
+PEAK_PREDICTIONS_PARQUET = PREDICTIONS_DIR / "peak_predictor_log.parquet"
+
 _ALL_DIRS = [
     DATA, HUB_PRICES_DIR, ZONE_PRICES_DIR, SYSTEM_GEN_DIR, EIA_DIR, EIA_RAW_DIR,
     EIA860_DIR, EIA860_RAW_DIR,
     PRICE_FORECAST_DIR, ANCILLARY_DIR, LOAD_DIR, CAPACITY_DIR, WEATHER_DIR,
     DELIVERY_DIR, DELIVERY_URDB_RAW_DIR, QUEUE_DIR, GAS_DIR, FUTURES_DIR,
-    CSV_EXPORTS_DIR, LOGS_DIR,
+    PREDICTIONS_DIR, CSV_EXPORTS_DIR, LOGS_DIR,
 ]
 
 

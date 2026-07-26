@@ -8,3 +8,4 @@ plotly
 numpy
 yfinance
 curl_cffi
+pytest

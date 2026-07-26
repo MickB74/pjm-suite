@@ -167,11 +167,15 @@ def expected_prices(price_df: pd.DataFrame, location: str,
     ``price_df`` is a load_hub_prices frame (naive-Eastern interval columns,
     already filtered to one market). Returns interval_start / exp_price.
     """
+    empty = pd.DataFrame({
+        "interval_start": pd.Series(dtype=f"datetime64[ns, {tz.EASTERN}]"),
+        "exp_price": pd.Series(dtype=float),
+    })
     if price_df is None or price_df.empty:
-        return pd.DataFrame(columns=["interval_start", "exp_price"])
+        return empty
     p = price_df[price_df["pnode_name"] == location].copy()
     if p.empty:
-        return pd.DataFrame(columns=["interval_start", "exp_price"])
+        return empty
     out = pd.DataFrame({
         "interval_start": tz.localize_eastern(p["datetime_beginning_ept"]),
         "exp_price": pd.to_numeric(p[component], errors="coerce"),

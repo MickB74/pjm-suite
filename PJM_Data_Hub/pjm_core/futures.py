@@ -246,6 +246,7 @@ def update(log=print) -> pd.DataFrame | None:
     df.to_csv(paths.FUTURES_CSV, index=False)
     paths.FUTURES_STATE.write_text(json.dumps({
         "asof": pd.Timestamp.now().strftime("%Y-%m-%d"),
+        "last_success": pd.Timestamp.now(tz="UTC").isoformat(),
         "trade_date": str(df["asof"].max()),
         "rows": len(df),
     }, indent=2))

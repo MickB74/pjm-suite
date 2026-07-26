@@ -64,6 +64,28 @@ ZONE_PNODE_IDS = {
 # The primary hub for this suite
 PRIMARY_HUB = "DOMINION HUB"
 
+# Each trading hub's "home" load zone, using the short zone codes from PJM's
+# hourly metered-load feed (CE = ComEd, PE = PECO, PS = PSEG, AP = APS, ...).
+# Broad aggregates (WESTERN HUB, OHIO HUB, WEST INT HUB) span many zones and
+# have no single home zone, so they are absent.
+HUB_LOAD_ZONE = {
+    "DOMINION HUB": "DOM",
+    "AEP-DAYTON HUB": "AEP",
+    "AEP GEN HUB": "AEP",
+    "ATSI GEN HUB": "ATSI",
+    "CHICAGO HUB": "CE",
+    "CHICAGO GEN HUB": "CE",
+    "N ILLINOIS HUB": "CE",
+    "NEW JERSEY HUB": "PS",
+    "EASTERN HUB": "PE",
+}
+
+# Reverse lookup: the hub that best represents a load zone's price. Where
+# several hubs share a home zone, the first (the main trading hub) wins.
+ZONE_HOME_HUB: dict[str, str] = {}
+for _hub, _zone in HUB_LOAD_ZONE.items():
+    ZONE_HOME_HUB.setdefault(_zone, _hub)
+
 # Approximate lat/lon for each trading hub, used for map visualizations.
 # These are representative points within each hub's zone, not exact
 # electrical locations (aggregate hubs don't have a single physical node).

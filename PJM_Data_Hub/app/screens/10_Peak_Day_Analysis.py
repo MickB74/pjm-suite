@@ -25,7 +25,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pjm_core import paths, prices as PX
-from pjm_core.settlement_points import PRIMARY_HUB
+from pjm_core.settlement_points import PRIMARY_HUB, HUB_LOAD_ZONE, ZONE_HOME_HUB
 from datasets.load import pjm_load
 from datasets.ancillary import pjm_as
 from datasets.weather import pjm_weather
@@ -173,6 +173,16 @@ if unit == "$/MWh":
         "`rt_hrl_lmps`.")
 
 # --- Drill into one peak day ------------------------------------------------
+# The drill-down follows whichever control drove the ranking: the selected
+# load zone (Load peak) or the selected hub (Price peak). The other side is
+# inferred where a natural counterpart exists — broad aggregate hubs have none.
+if basis == "Load peak":
+    drill_zone = metric_zone
+    drill_hub = ZONE_HOME_HUB.get(metric_zone, PRIMARY_HUB)
+else:
+    drill_hub = metric_hub or PRIMARY_HUB
+    drill_zone = HUB_LOAD_ZONE.get(drill_hub)
+
 st.divider()
 day_choices = ranked["day"].tolist()
 sel_day = st.selectbox("Dissect a peak day", day_choices,
@@ -197,18 +207,18 @@ _kpi_cards: list[tuple[str, str, str | None]] = []  # (label, value, tooltip)
 load_hr = _day_slice(load_df)
 if not load_hr.empty:
     rto_hr = load_hr[(load_hr["zone"] == "RTO") & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
-    dom_hr = load_hr[(load_hr["zone"] == "DOM") & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
     _kpi_cards.append(("RTO load", f"{rto_hr:,.0f} MW" if rto_hr else "—", None))
-    _kpi_cards.append(("DOM load", f"{dom_hr:,.0f} MW" if dom_hr else "—", None))
+    if drill_zone and drill_zone != "RTO":
+        zone_hr = load_hr[(load_hr["zone"] == drill_zone) & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
+        _kpi_cards.append((f"{drill_zone} load", f"{zone_hr:,.0f} MW" if zone_hr else "—", None))
 
 price_hr = _day_slice(prices_df)
 if not price_hr.empty:
-    hub_for_price = metric_hub or PRIMARY_HUB
-    ph = price_hr[(price_hr["pnode_name"] == hub_for_price)
+    ph = price_hr[(price_hr["pnode_name"] == drill_hub)
                   & (price_hr["market"] == "RT")
                   & (price_hr["datetime_beginning_ept"] == peak_hour)]
     if not ph.empty:
-        _hub_short = hub_for_price.replace(" HUB", "").title()
+        _hub_short = drill_hub.replace(" HUB", "").title()
         _kpi_cards.append((f"{_hub_short} RT LMP", f"${ph['total_lmp'].iloc[0]:,.2f}", None))
 
 as_hr = _day_slice(as_df)
@@ -263,19 +273,19 @@ if _kpi_cards:
 load_day = _day_slice(load_df)
 fig = go.Figure()
 if not load_day.empty:
-    for z in [z for z in ("RTO", "DOM") if z in load_day["zone"].unique()]:
+    trace_zones = ["RTO"] + ([drill_zone] if drill_zone and drill_zone != "RTO" else [])
+    for z in [z for z in trace_zones if z in load_day["zone"].unique()]:
         g = (load_day[load_day["zone"] == z]
              .groupby("datetime_beginning_ept", as_index=False)["mw"].sum())
         fig.add_trace(go.Scatter(x=g["datetime_beginning_ept"], y=g["mw"],
                                  name=f"{z} load (MW)", mode="lines"))
 price_day = _day_slice(prices_df)
 if not price_day.empty:
-    hub_for_price = metric_hub or PRIMARY_HUB
-    pg = (price_day[(price_day["pnode_name"] == hub_for_price) & (price_day["market"] == "RT")]
+    pg = (price_day[(price_day["pnode_name"] == drill_hub) & (price_day["market"] == "RT")]
           .sort_values("datetime_beginning_ept"))
     if not pg.empty:
         fig.add_trace(go.Scatter(x=pg["datetime_beginning_ept"], y=pg["total_lmp"],
-                                 name=f"{hub_for_price} RT ($/MWh)", mode="lines",
+                                 name=f"{drill_hub} RT ($/MWh)", mode="lines",
                                  yaxis="y2", line=dict(dash="dot", color="#d62728")))
 fig.add_vline(x=peak_hour, line_dash="dash", line_color="#888")
 fig.update_layout(

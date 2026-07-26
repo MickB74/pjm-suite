@@ -184,6 +184,42 @@ def _finish_auto_refresh(st_obj, status, *, skipped: bool) -> None:
         st_obj.cache_data.clear()
 
 
+_STATUS_DOT = {"green": "🟢", "yellow": "🟡", "red": "🔴", "grey": "⚪"}
+
+
+def data_freshness_badge(st_obj) -> None:
+    """Sidebar badge showing per-dataset freshness at a glance.
+
+    Reads the lake's ``.last_update.json`` markers (via ``pjm_core.data_status``)
+    and shows a coloured dot per dataset. Silent failures — a pipeline that
+    stopped running while charts continued to render plausible-looking numbers —
+    are the highest-consequence failure mode; this makes them visible on every
+    screen without needing to open a terminal.
+    """
+    from pjm_core import data_status
+
+    statuses = data_status.all_statuses()
+    counts = {"green": 0, "yellow": 0, "red": 0, "grey": 0}
+    for s in statuses:
+        counts[s.status] += 1
+
+    worst = data_status.worst_color(counts)
+    with st_obj.sidebar:
+        header = f"{_STATUS_DOT[worst]} Data lake"
+        stale = counts["yellow"] + counts["red"]
+        subtitle = (f"{counts['green']} fresh · {stale} stale · "
+                    f"{counts['grey']} missing")
+        with st_obj.expander(header, expanded=False):
+            st_obj.caption(subtitle)
+            for s in statuses:
+                st_obj.markdown(
+                    f"{_STATUS_DOT[s.status]} **{s.label}** — {s.detail}"
+                )
+            if st_obj.button("Open Data Status page", use_container_width=True,
+                             key="_ds_open_btn"):
+                st.switch_page("screens/22_Data_Status.py")
+
+
 def refresh_prompt(st_obj) -> None:
     """Render a sidebar refresh control instead of auto-pulling on open.
 
@@ -192,6 +228,7 @@ def refresh_prompt(st_obj) -> None:
     sidebar and let the user click to refresh when they actually want it. The
     pull only runs on click, so opening the app is instant.
     """
+    data_freshness_badge(st_obj)
     with st_obj.sidebar:
         hrs = _hours_since_last_refresh()
         if hrs is None:
