@@ -31,6 +31,65 @@ def load() -> pd.DataFrame | None:
     return pd.read_csv(paths.GAS_STRIP_CSV, parse_dates=["month"])
 
 
+# ── Vintage history ──────────────────────────────────────────────────────────
+# Every successful pull is also appended to a parquet of dated snapshots
+# (asof, month, gas_price) so a forecast can be re-run against the strip
+# exactly as it stood on a past date. One vintage per day; a same-day
+# re-pull replaces that day's snapshot.
+
+def history() -> pd.DataFrame | None:
+    """All strip vintages as [asof, month, gas_price], or None if absent."""
+    if not paths.GAS_STRIP_HISTORY_PARQUET.exists():
+        return None
+    return pd.read_parquet(paths.GAS_STRIP_HISTORY_PARQUET)
+
+
+def vintages() -> list[pd.Timestamp]:
+    """Sorted (oldest first) asof dates with an archived strip snapshot."""
+    hist = history()
+    if hist is None or hist.empty:
+        return []
+    return sorted(pd.to_datetime(hist["asof"]).unique())
+
+
+def strip_asof(when) -> tuple[pd.DataFrame, pd.Timestamp] | None:
+    """The most recent archived strip on or before `when`.
+
+    Returns ([month, gas_price], vintage_date), or None if no vintage that
+    old exists — callers should treat that as "can't backtest this date",
+    not silently substitute today's strip.
+    """
+    hist = history()
+    if hist is None or hist.empty:
+        return None
+    when = pd.Timestamp(when).normalize()
+    asofs = pd.to_datetime(hist["asof"])
+    eligible = asofs[asofs <= when]
+    if eligible.empty:
+        return None
+    vintage = eligible.max()
+    snap = (hist[asofs == vintage][["month", "gas_price"]]
+            .assign(month=lambda d: pd.to_datetime(d["month"]))
+            .sort_values("month").reset_index(drop=True))
+    return snap, vintage
+
+
+def _append_history(df: pd.DataFrame, asof: pd.Timestamp, log=print) -> None:
+    """Archive this pull as a vintage. Best-effort — never raises."""
+    try:
+        snap = df[["month", "gas_price"]].assign(asof=asof.normalize())
+        snap = snap[["asof", "month", "gas_price"]]
+        hist = history()
+        if hist is not None:
+            hist = hist[pd.to_datetime(hist["asof"]) != asof.normalize()]
+            snap = pd.concat([hist, snap], ignore_index=True)
+        snap = snap.sort_values(["asof", "month"]).reset_index(drop=True)
+        paths.GAS_DIR.mkdir(parents=True, exist_ok=True)
+        snap.to_parquet(paths.GAS_STRIP_HISTORY_PARQUET, index=False)
+    except Exception as e:
+        log(f"Gas strip: history append failed ({e}); latest CSV still written.")
+
+
 def refreshed_today() -> bool:
     """True if the cached strip was already pulled today (per its state marker).
 
@@ -67,6 +126,7 @@ def update(log=print) -> pd.DataFrame | None:
           .sort_values("month"))
     paths.GAS_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(paths.GAS_STRIP_CSV, index=False)
+    _append_history(df, asof, log=log)
     paths.GAS_STRIP_STATE.write_text(json.dumps({
         "asof": asof.strftime("%Y-%m-%d"),
         "last_success": pd.Timestamp.now(tz="UTC").isoformat(),

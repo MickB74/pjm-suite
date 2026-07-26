@@ -54,6 +54,7 @@ PJM_Data_Hub/
 - **Paths**: All data paths go through `pjm_core.paths` — never hardcode `data/` paths.
 - **Screens**: Numbered `NN_Name.py` in `app/screens/`. Sidebar order and grouping are **not** the filename prefix — they're defined explicitly by the `st.navigation({...})` dict in `app/Home.py`, keyed by section ("Start Here", "Explore", "Capacity & Peaks", "Analyze"). Each page's URL slug also comes from its `st.Page(..., title=...)` there.
 - **Data lake**: Parquet files under `PJM_Data_Hub/data/` with `.last_update.json` freshness markers.
+- **Gas strip vintages**: every `gas_strip.update()` pull is also archived to `data/gas/henry_hub_strip_history.parquet` (one snapshot per day, keyed by `asof`). `gas_strip.strip_asof(date)` returns the strip as it stood on a date; `price_forecast.run(asof=d, gas_asof=d)` re-runs the forecast from that vintage (Price Forecast screen → "Gas strip vintage" picker). A missing vintage raises — never silently substitute today's strip in a backtest.
 - **Primary hub**: `DOMINION HUB` — defined in `pjm_core.settlement_points.PRIMARY_HUB`.
 - **Settlement math**: Offtaker-signed (positive = offtaker receives). See `pjm_core/settlement.py`.
 

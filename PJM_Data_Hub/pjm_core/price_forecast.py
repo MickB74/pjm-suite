@@ -200,12 +200,32 @@ def _gas_curve(
     horizon_months: int,
     asof: pd.Timestamp,
     csv_override: Path | None = None,
+    gas_asof=None,
 ) -> tuple[pd.Series, str]:
     """Gas forward curve and the source label describing where it came from.
 
     Priority: explicit override → manual override CSV → cached NYMEX strip
     (refreshed at launch) → live NYMEX strip (Yahoo) → EIA STEO forecast →
-    EIA spot + mean-reversion → flat $4 anchor. Returns (series, source_label)."""
+    EIA spot + mean-reversion → flat $4 anchor. Returns (series, source_label).
+
+    `gas_asof` pins the curve to an archived strip vintage (the strip as it
+    stood on that date) instead of the live chain — used to re-run forecasts
+    from a past date. Raises ValueError if no vintage that old exists, rather
+    than silently substituting today's strip."""
+    # 0. Archived vintage requested — bypass the live chain entirely.
+    if gas_asof is not None:
+        from pjm_core import gas_strip  # local import; gas_strip imports us
+        got = gas_strip.strip_asof(gas_asof)
+        if got is None:
+            raise ValueError(
+                f"No archived gas-strip vintage on or before "
+                f"{pd.Timestamp(gas_asof).date()} — vintages accumulate daily "
+                "as the strip is pulled, so older dates can't be backtested.")
+        snap, vintage = got
+        strip = snap.set_index("month")["gas_price"]
+        return (_extend_to_horizon(strip, horizon_months, asof),
+                f"NYMEX strip (vintage {vintage:%Y-%m-%d})")
+
     # 1. Explicit override passed by the caller (used in tests).
     if csv_override and csv_override.exists():
         df = pd.read_csv(csv_override, parse_dates=["month"])
@@ -305,6 +325,7 @@ def run(
     n_sims: int = DEFAULT_N_SIMS,
     seed: int = DEFAULT_SEED,
     eia_api_key: str | None = None,
+    gas_asof=None,
 ) -> pd.DataFrame:
     """Run the Monte Carlo price forecast.
 
@@ -312,12 +333,16 @@ def run(
         month (Timestamp, first-of-month), cal_month (int 1–12),
         p10, p25, p50, p75, p90 ($/MWh), n_samples (heat-rate sample count),
         gas_fwd ($/MMBtu used for P50 anchor).
+
+    Pass `gas_asof` (with a matching `asof`) to re-run the forecast from a
+    past date using the archived gas-strip vintage from that date.
     """
     asof = pd.Timestamp(asof) if asof else pd.Timestamp.now().normalize()
     rng = np.random.default_rng(seed)
 
     gas_history = _gas_from_eia(eia_api_key)
-    gas_fwd, gas_source = _gas_curve(eia_api_key, horizon_months, asof)
+    gas_fwd, gas_source = _gas_curve(eia_api_key, horizon_months, asof,
+                                     gas_asof=gas_asof)
     monthly_lmp = _load_dom_hub_monthly(hub)
     hr_dist = _build_heat_rate_distribution(monthly_lmp, gas_history)
 

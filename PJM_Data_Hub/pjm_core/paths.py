@@ -94,6 +94,9 @@ QUEUE_STATE = QUEUE_DIR / ".last_update.json"
 GAS_STRIP_CSV = GAS_DIR / "henry_hub_nymex_strip.csv"
 GAS_OVERRIDE_CSV = GAS_DIR / "gas_price_override.csv"
 GAS_STRIP_STATE = GAS_DIR / ".last_update.json"
+# Every strip pull is also appended here as a dated vintage (asof, month,
+# gas_price) so forecasts can be re-run against the strip as of a past date.
+GAS_STRIP_HISTORY_PARQUET = GAS_DIR / "henry_hub_strip_history.parquet"
 
 # PJM Western Hub forward curve (exchange-traded power futures). No free API:
 # user-maintained reference CSV seeded in futures.py, with a best-effort CME

@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from pjm_core import credentials, paths, price_forecast
+from pjm_core import credentials, gas_strip, paths, price_forecast
 from pjm_core.settlement_points import HUBS, PRIMARY_HUB
 
 st.title("📉 PJM Hub Price Forecast")
@@ -29,12 +29,25 @@ if not paths.HUB_PRICES_PARQUET.exists():
     st.warning("No hub price data yet — run the update from **API Keys** first.")
     st.stop()
 
+_LATEST = "Latest (live)"
+
 with st.sidebar:
     st.header("Forecast settings")
     hub = st.selectbox("Hub", HUBS, index=HUBS.index(PRIMARY_HUB))
     horizon = st.slider("Horizon (months)", 3, 36, 12)
     n_sims = st.select_slider("Monte Carlo paths", [1_000, 2_000, 5_000, 10_000], value=5_000)
+    _vintage_dates = gas_strip.vintages()
+    vintage_pick = st.selectbox(
+        "Gas strip vintage", [_LATEST] + [f"{d:%Y-%m-%d}" for d in reversed(_vintage_dates)],
+        key="gas_vintage",
+        help="Re-run the forecast using the Henry Hub strip exactly as it "
+             "stood on a past date. One vintage is archived per daily pull, "
+             "so this list grows over time.")
     run_btn = st.button("Run forecast", type="primary")
+
+_vintage_kwargs = {}
+if vintage_pick != _LATEST:
+    _vintage_kwargs = {"asof": vintage_pick, "gas_asof": vintage_pick}
 
 cfg = credentials.load_config()
 eia_key = credentials.get_eia_api_key()
@@ -45,9 +58,11 @@ if run_btn:
             df = price_forecast.run(
                 hub=hub, horizon_months=horizon,
                 n_sims=n_sims, eia_api_key=eia_key or None,
+                **_vintage_kwargs,
             )
             st.session_state["forecast_df"] = df
             st.session_state["forecast_hub"] = hub
+            st.session_state["forecast_vintage"] = vintage_pick
         except Exception as e:
             st.error(f"Forecast failed: {e}")
             st.stop()
@@ -67,8 +82,15 @@ elif "forecast_df" not in st.session_state:
 
 df = st.session_state["forecast_df"]
 used_hub = st.session_state.get("forecast_hub", hub)
+used_vintage = st.session_state.get("forecast_vintage", _LATEST)
 
 st.subheader(f"{used_hub} — {len(df)}-month forward strip")
+if used_vintage != _LATEST:
+    st.info(
+        f"🕰️ **Vintage re-run:** this forecast starts from **{used_vintage}** "
+        f"and uses the Henry Hub strip archived on that date — what the model "
+        "would have said then, not today's view."
+    )
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(
@@ -106,7 +128,10 @@ col2.metric("P50 (avg over strip)", f"${df['p50'].mean():,.2f}/MWh")
 col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:,.2f}/MMBtu")
 
 gas_source = df["gas_source"].iloc[0] if "gas_source" in df.columns else "unknown"
-if gas_source.startswith("NYMEX strip (cached"):
+if gas_source.startswith("NYMEX strip (vintage"):
+    _source_note = ("Archived Henry Hub strip snapshot from the selected date; "
+                    "months past the liquid strip mean-revert to $4.")
+elif gas_source.startswith("NYMEX strip (cached"):
     _source_note = ("Real traded Henry Hub strip pulled from Yahoo at launch and "
                     "cached to CSV; months past the liquid strip mean-revert to $4.")
 else:
