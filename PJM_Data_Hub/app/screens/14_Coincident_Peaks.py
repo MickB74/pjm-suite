@@ -147,7 +147,7 @@ if has_wx:
 if "dom_temp_f" in disp.columns:
     cols += ["dom_temp_f"]; rename |= {"dom_temp_f": "DOM temp °F"}; fmts |= {"DOM temp °F": "{:.0f}"}
 st.dataframe(disp[cols].rename(columns=rename).style.format(fmts),
-             use_container_width=True, hide_index=True)
+             width="stretch", hide_index=True)
 
 # --- Load vs temperature scatter (the driver) -------------------------------
 if has_wx:
@@ -166,7 +166,7 @@ if has_wx:
                      title=f"{year} summer: peak load vs. apparent temperature")
     fig.update_traces(marker=dict(size=9, line=dict(width=0.5, color="#fff")))
     fig.update_layout(height=440, margin=dict(t=40))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # --- Intraday load + temperature on the 5CP days ----------------------------
 st.subheader(f"{year} 5CP days — intraday load & temperature")
@@ -180,7 +180,7 @@ figl = px.line(ld, x="hour", y="mw", color="day",
                labels={"hour": "Hour of day (EPT)", "mw": "RTO load (MW)", "day": "5CP day"},
                title="Load shape on each 5CP day")
 figl.update_layout(height=380, margin=dict(t=40))
-st.plotly_chart(figl, use_container_width=True)
+st.plotly_chart(figl, width="stretch")
 
 # --- Historical 5CP across all summers --------------------------------------
 st.divider()
@@ -202,7 +202,7 @@ for y in summers:
 hist = pd.DataFrame(hist_rows)
 st.dataframe(
     hist.style.format({"5CP avg (MW)": "{:,.0f}", "Top peak (MW)": "{:,.0f}", "Avg apparent °F": "{:.0f}"}),
-    use_container_width=True, hide_index=True)
+    width="stretch", hide_index=True)
 if (last_load_day.month, last_load_day.day) < SUMMER_END:
     st.caption("⚠ *partial* = summer still in progress (or load data ends before "
                "Sep 30); its 5CP is provisional and will shift as more days settle.")

@@ -58,7 +58,7 @@ def _read(name: str, data: bytes) -> pd.DataFrame:
 
 raw = _read(up.name, up.getvalue())
 st.write(f"**{len(raw):,}** rows · **{len(raw.columns)}** columns")
-st.dataframe(raw.head(8), use_container_width=True)
+st.dataframe(raw.head(8), width="stretch")
 
 guess = INV.suggest_mapping(raw.columns)
 cols = list(raw.columns)
@@ -110,7 +110,7 @@ with st.container(border=True):
                               step=0.01, format="%.2f")
     rel_tol = st.number_input("Relative (%)", value=0.5, min_value=0.0, step=0.1,
                               format="%.2f") / 100.0
-    run = st.button("▶ Validate", type="primary", use_container_width=True)
+    run = st.button("▶ Validate", type="primary", width="stretch")
 
 mapping = {
     "time_col": time_col, "time_basis": time_basis, "interval": interval,
@@ -210,7 +210,7 @@ styler = view.style.apply(_style, subset=["status"]).format({**money, **qty})
 for _dcol in ("amount_delta", "price_delta"):
     if _dcol in view.columns:
         styler = styler.apply(_style_payer_delta, subset=[_dcol])
-st.dataframe(styler, use_container_width=True, height=460)
+st.dataframe(styler, width="stretch", height=460)
 
 st.download_button(
     "⬇ Download reconciliation (CSV)",

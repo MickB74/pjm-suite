@@ -64,7 +64,7 @@ fig = px.line(
 fig.update_traces(hovertemplate="%{x}<br>$%{y:,.2f}/MWh<extra></extra>")
 fig.update_layout(height=430, margin=dict(t=40), yaxis_tickprefix="$",
                   legend_title_text="")
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # --- Calendar strips ---------------------------------------------------------
 strips = futures.calendar_strips(df)
@@ -112,7 +112,7 @@ show = (df.rename(columns={
     "price": "$/MWh", "source": "Source"}))
 st.dataframe(
     show.style.format({"$/MWh": "${:,.2f}"}),
-    use_container_width=True, height=380, hide_index=True)
+    width="stretch", height=380, hide_index=True)
 st.download_button(
     "⬇ Download Western Hub forward curve (CSV)",
     df.to_csv(index=False).encode(),

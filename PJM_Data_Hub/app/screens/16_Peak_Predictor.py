@@ -128,7 +128,7 @@ st.dataframe(
         "Predicted peak (MW)": "{:,.0f}",
         "Margin vs 5CP (MW)": "{:+,.0f}", "5CP prob": "{:.0%}",
     }),
-    use_container_width=True, hide_index=True)
+    width="stretch", hide_index=True)
 st.caption("Risk bands: 🔴 High ≥66% · 🟠 Elevated ≥33% · 🟡 Watch ≥10% · 🟢 Low. "
            "Forecast skill fades past ~7 days; treat the far tail as directional.")
 
@@ -147,7 +147,7 @@ fig.add_hline(y=threshold, line_dash="dash", line_color="#888",
 fig.update_layout(height=420, margin=dict(t=30),
                   yaxis_title="RTO peak load (MW)", xaxis_title=None,
                   showlegend=False)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # --- Model diagnostics ------------------------------------------------------
 with st.expander("Model & method"):

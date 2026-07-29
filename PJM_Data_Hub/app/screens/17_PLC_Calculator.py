@@ -89,7 +89,7 @@ for _, r in cp.iterrows():
     })
 edf = pd.DataFrame(editor_rows)
 edited = st.data_editor(
-    edf, hide_index=True, use_container_width=True,
+    edf, hide_index=True, width="stretch",
     disabled=["Rank", "5CP hour (EPT)", "RTO peak (MW)"],
     column_config={
         "RTO peak (MW)": st.column_config.NumberColumn(format="%.0f"),
@@ -167,7 +167,7 @@ bd = pd.DataFrame({
     "Value": [f"{price:,.2f} $/MW-day", f"{plc:,.3f} MW", f"${daily:,.0f}/day",
               f"${monthly:,.0f}/mo", f"${annual:,.0f}/yr"],
 })
-st.dataframe(bd, hide_index=True, use_container_width=True)
+st.dataframe(bd, hide_index=True, width="stretch")
 
 # --- What curtailment is worth ----------------------------------------------
 st.subheader("What shaving load at the peaks is worth")

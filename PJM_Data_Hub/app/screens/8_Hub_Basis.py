@@ -85,7 +85,7 @@ fig = px.bar(avg, x="avg_basis", y="hub", orientation="h",
 fig.add_vline(x=0, line_dash="dot", line_color="#888")
 fig.update_layout(height=max(300, 34 * len(avg)), margin=dict(t=40),
                   coloraxis_showscale=False)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Monthly basis heatmap (hub × month).
 st.subheader("Monthly average basis")
@@ -100,7 +100,7 @@ if not pivot.empty:
     fig2.update_xaxes(type="category")
     fig2.update_yaxes(type="category")
     fig2.update_layout(height=max(300, len(pivot) * 34 + 120), margin=dict(t=20))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 # Summary table: mean / std / min / max basis per hub.
 stats = pd.DataFrame({
@@ -111,7 +111,7 @@ stats = pd.DataFrame({
 }).sort_values("avg_basis", ascending=False)
 st.dataframe(
     stats.style.format("${:,.2f}"),
-    use_container_width=True)
+    width="stretch")
 
 st.download_button(
     "⬇ Download hourly basis (CSV)",

@@ -170,7 +170,7 @@ if not by_src.empty:
                   title=f"Estimated energy revenue by source ({year_sel}, {market})")
     figs.update_layout(height=max(280, 34 * len(by_src)), margin=dict(t=30),
                        showlegend=False)
-    st.plotly_chart(figs, use_container_width=True)
+    st.plotly_chart(figs, width="stretch")
 
 rank_col = "est_total_rev" if has_cap else "est_revenue"
 st.subheader("Top plants by estimated " + ("total" if has_cap else "energy") + " revenue")
@@ -204,7 +204,7 @@ else:
                   labels={"est_revenue": "Est. energy revenue ($)", "plant_name": ""},
                   title=f"Top 20 plants by estimated energy revenue ({year_sel}, {market})")
     figt.update_layout(height=560, yaxis={"categoryorder": "total ascending"}, margin=dict(t=30))
-st.plotly_chart(figt, use_container_width=True)
+st.plotly_chart(figt, width="stretch")
 
 # --- plant table + export ---------------------------------------------------
 st.subheader("Plant detail")
@@ -231,7 +231,7 @@ else:
 # Direct link to each plant's EIA Electricity Data Browser page.
 tbl["EIA page"] = tbl["Plant ID"].map(plant_earnings.eia_plant_url)
 st.dataframe(
-    tbl.style.format(fmt), use_container_width=True, hide_index=True,
+    tbl.style.format(fmt), width="stretch", hide_index=True,
     column_config={
         "EIA page": st.column_config.LinkColumn(
             "EIA page", display_text="View ↗",

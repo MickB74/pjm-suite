@@ -162,7 +162,7 @@ figd.update_layout(
     barmode="relative", height=360, margin=dict(t=30),
     yaxis=dict(title="°F-days  (cooling ▲ / heating ▼)"),
     legend=dict(orientation="h", y=-0.2))
-st.plotly_chart(figd, use_container_width=True)
+st.plotly_chart(figd, width="stretch")
 
 # --- Monthly totals ---------------------------------------------------------
 st.subheader("Monthly totals")
@@ -174,7 +174,7 @@ figm.add_trace(go.Bar(x=monthly["month"], y=monthly["cdd"], name="CDD", marker_c
 figm.add_trace(go.Bar(x=monthly["month"], y=monthly["hdd"], name="HDD", marker_color=HDD_COLOR))
 figm.update_layout(barmode="group", height=320, margin=dict(t=30),
                    yaxis=dict(title="°F-days"), legend=dict(orientation="h", y=-0.2))
-st.plotly_chart(figm, use_container_width=True)
+st.plotly_chart(figm, width="stretch")
 
 # --- Degree days vs load ----------------------------------------------------
 st.subheader("Degree days vs. load")
@@ -219,7 +219,7 @@ else:
                 xaxis=dict(title=f"{xcol.upper()} (°F-days)"),
                 yaxis=dict(title=f"{load_zone} {ycol.lower()} load (MW)"),
                 legend=dict(orientation="h", y=-0.2))
-            st.plotly_chart(figs, use_container_width=True)
+            st.plotly_chart(figs, width="stretch")
             st.caption(
                 f"**r = {r:.2f}** · each additional {xcol.upper()} adds ≈ "
                 f"**{b1:,.0f} MW** to {load_zone} {ycol.lower()} load "
@@ -245,7 +245,7 @@ figy.add_trace(go.Bar(x=by_year["year"], y=by_year["hdd"], name="HDD (heating)",
 figy.update_layout(barmode="group", height=340, margin=dict(t=30),
                    xaxis=dict(title="Year", dtick=1), yaxis=dict(title="°F-days"),
                    legend=dict(orientation="h", y=-0.2))
-st.plotly_chart(figy, use_container_width=True)
+st.plotly_chart(figy, width="stretch")
 if partial:
     st.caption(f"⚠️ Partial year(s) (incomplete data, not full-year comparable): "
                f"{', '.join(str(p) for p in partial)}.")

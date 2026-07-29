@@ -215,7 +215,7 @@ def data_freshness_badge(st_obj) -> None:
                 st_obj.markdown(
                     f"{_STATUS_DOT[s.status]} **{s.label}** — {s.detail}"
                 )
-            if st_obj.button("Open Data Status page", use_container_width=True,
+            if st_obj.button("Open Data Status page", width="stretch",
                              key="_ds_open_btn"):
                 st.switch_page("screens/22_Data_Status.py")
 
@@ -237,7 +237,7 @@ def refresh_prompt(st_obj) -> None:
             st_obj.caption(f"PJM data refreshed {int(hrs * 60)} min ago.")
         else:
             st_obj.caption(f"PJM data last refreshed {hrs:.0f} h ago.")
-        if st_obj.button("🔄 Refresh PJM data", use_container_width=True,
+        if st_obj.button("🔄 Refresh PJM data", width="stretch",
                          help="Incrementally pull the latest hub prices, ancillary, "
                               "load, and weather. Runs only when you click."):
             # Start the skippable refresh; Home drives it (and shows Skip) in the

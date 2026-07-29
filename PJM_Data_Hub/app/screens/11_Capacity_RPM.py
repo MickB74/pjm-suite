@@ -102,7 +102,7 @@ fig = px.bar(sub, x="delivery_year", y="clearing_price_mw_day", color="lda",
              labels={"delivery_year": "Delivery year", "clearing_price_mw_day": "$/MW-day", "lda": "LDA"},
              title="RPM BRA clearing price by delivery year")
 fig.update_layout(height=420, margin=dict(t=40))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 with st.expander("Why all LDAs clear at the same price now — the FERC price cap"):
     st.markdown(
@@ -193,7 +193,7 @@ else:
         title=f"Annual capacity bill for {mw:,.0f} MW in {lda} — by delivery year")
     fig_cost.update_traces(hovertemplate="%{x}<br>$%{y:,.0f}/yr<extra></extra>")
     fig_cost.update_layout(height=380, margin=dict(t=40), yaxis_tickprefix="$")
-    st.plotly_chart(fig_cost, use_container_width=True)
+    st.plotly_chart(fig_cost, width="stretch")
 
     # Head-to-head comparison of specific delivery years.
     st.markdown("**Compare specific delivery years**")
@@ -248,7 +248,7 @@ else:
         fig_cmp.update_layout(
             height=380, margin=dict(t=40), yaxis_tickprefix="$",
             showlegend=False)
-        st.plotly_chart(fig_cmp, use_container_width=True)
+        st.plotly_chart(fig_cmp, width="stretch")
 
         cmp_show = cmp_df.rename(columns={
             "delivery_year": "Delivery year",
@@ -259,7 +259,7 @@ else:
             cmp_show.style.format({
                 "$/MW-day": "${:,.2f}", "Daily cost": "${:,.0f}",
                 "Annual cost": "${:,.0f}"}),
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
 
 # --- All-in cost of power by year (2020–2026) --------------------------------
 # Capacity is only one slice of the bill. Stack it with the *actual* energy
@@ -383,7 +383,7 @@ else:
         hovertemplate="%{x} · %{fullData.name}<br>$%{y:,.0f}<extra></extra>")
     fig_allin.update_layout(height=430, margin=dict(t=40), yaxis_tickprefix="$",
                             legend_title_text="")
-    st.plotly_chart(fig_allin, use_container_width=True)
+    st.plotly_chart(fig_allin, width="stretch")
     st.caption(f"Energy & ancillary applied to **{mwh:,.0f} MWh/yr** "
                f"(= {allin_mw:,.0f} MW × 8,760 h × {lf:.0%}). **2026 is "
                "year-to-date** (partial). Ancillary = PJM reserve/regulation spend "
@@ -397,14 +397,14 @@ else:
             "Capacity": "${:,.0f}", "Commodity (energy)": "${:,.0f}",
             "Ancillary": "${:,.0f}", "Total": "${:,.0f}",
             "All-in $/MWh": "${:,.2f}"}),
-        use_container_width=True, hide_index=True)
+        width="stretch", hide_index=True)
 
 # Reference table + download.
 st.subheader("Reference table")
 st.dataframe(
     df[["delivery_year", "lda", "auction", "clearing_price_mw_day", "clearing_price_mw_year"]]
     .style.format({"clearing_price_mw_day": "${:,.2f}", "clearing_price_mw_year": "${:,.0f}"}),
-    use_container_width=True, height=380)
+    width="stretch", height=380)
 st.download_button(
     "⬇ Download RPM clearing prices (CSV)",
     df.to_csv(index=False).encode(),

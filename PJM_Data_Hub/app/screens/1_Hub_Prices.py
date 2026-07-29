@@ -190,7 +190,7 @@ if not map_df.empty:
         margin=dict(t=10, b=0, l=0, r=0),
         font=dict(color="white"),
     )
-    st.plotly_chart(fig_map, use_container_width=True)
+    st.plotly_chart(fig_map, width="stretch")
     if map_color == "Region cluster":
         _cap_extra = "Colors group hubs that overlap the same geography."
     elif map_color == "Hierarchy (nesting)":
@@ -229,7 +229,7 @@ if not chart_df.empty:
                   labels={"dt": "Hour (EPT)", "price": f"{component} ($/MWh)", "hub": "Hub"},
                   log_y=logy)
     fig.update_layout(height=400, margin=dict(t=20))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # Monthly heatmap for DOM HUB
 if PRIMARY_HUB in sel_hubs:
@@ -245,4 +245,4 @@ if PRIMARY_HUB in sel_hubs:
         fig2.update_yaxes(type="category")
         fig2.update_xaxes(type="category")
         fig2.update_layout(height=max(300, len(pivot) * 30), margin=dict(t=20))
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")

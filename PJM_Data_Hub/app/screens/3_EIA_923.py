@@ -95,7 +95,7 @@ fig0 = px.bar(by_source, x="net_generation_mwh", y="source", orientation="h",
               title=f"Net generation by source ({year_sel})")
 fig0.update_layout(height=max(280, 34 * len(by_source)), margin=dict(t=30),
                    showlegend=False)
-st.plotly_chart(fig0, use_container_width=True)
+st.plotly_chart(fig0, width="stretch")
 
 top = annual.nlargest(20, "net_generation_mwh")[
     ["plant_name", "state", "source", "fuel_type", "net_generation_mwh"]]
@@ -105,7 +105,7 @@ fig = px.bar(top, x="net_generation_mwh", y="plant_name", orientation="h",
              labels={"net_generation_mwh": "Net Generation (MWh)", "plant_name": ""},
              title=f"Top 20 plants by net generation ({year_sel})")
 fig.update_layout(height=500, yaxis={"categoryorder": "total ascending"}, margin=dict(t=30))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 has_month = "month" in sub.columns and sub["month"].notna().any()
 if has_month:
@@ -119,14 +119,14 @@ if has_month:
                   title=f"Filtered plants by month × source ({year_sel})")
     fig2.update_layout(height=360, margin=dict(t=30), xaxis=dict(dtick=1),
                        barmode="stack")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
     # When narrowed to a handful of plants, show each plant's monthly profile.
     if annual["plant_name"].nunique() <= 30 and (search or fuel_sel != "All"):
         pivot = (sub.dropna(subset=["month"])
                  .pivot_table(index=["plant_name", "fuel_type"], columns="month",
                               values="net_generation_mwh", aggfunc="sum"))
-        st.dataframe(pivot.style.format("{:,.0f}"), use_container_width=True)
+        st.dataframe(pivot.style.format("{:,.0f}"), width="stretch")
 
 st.subheader("Plant detail")
 st.caption("One row per plant × fuel, annual net generation (MWh) for the selected year.")
@@ -136,4 +136,4 @@ _tbl = (annual.sort_values("net_generation_mwh", ascending=False)
                          "state": "State", "source": "Source",
                          "fuel_type": "Fuel code", "net_generation_mwh": "Net gen (MWh)"}))
 st.dataframe(_tbl.style.format({"Net gen (MWh)": "{:,.0f}"}),
-             use_container_width=True, hide_index=True)
+             width="stretch", hide_index=True)

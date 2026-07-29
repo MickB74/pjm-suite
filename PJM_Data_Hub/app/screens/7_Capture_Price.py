@@ -128,7 +128,7 @@ fig = px.bar(view, x="capture_price", y="fuel", orientation="h", color="fuel",
 fig.add_vline(x=rtc, line_dash="dot", line_color="#ccc",
               annotation_text="RTC", annotation_position="top")
 fig.update_layout(height=max(280, 46 * len(view)), margin=dict(t=40), showlegend=False)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Monthly capture price trend per selected fuel.
 st.subheader("Monthly capture price")
@@ -151,12 +151,12 @@ if not mdf.empty:
                    labels={"month": "Month", "capture_price": "Capture price ($/MWh)",
                            "fuel": "Source"})
     fig2.update_layout(height=380, margin=dict(t=20))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 st.dataframe(
     cap.sort_values("capture_price", ascending=False).reset_index(drop=True)
     .style.format({"capture_price": "${:,.2f}", "capture_ratio": "{:.1%}", "avg_mw": "{:,.0f}"}),
-    use_container_width=True)
+    width="stretch")
 
 st.caption("Fuel mix comes from PJM's `gen_by_fuel` feed (all 10 fuels incl. "
            "gas). Watch the capture *ratio*: wind/solar < 100% (they depress "

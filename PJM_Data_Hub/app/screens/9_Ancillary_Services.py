@@ -101,7 +101,7 @@ fig = px.line(daily, x="day", y="mcp", color="product",
               labels={"day": "Date", "mcp": "MCP ($/MWh)", "product": "Product"},
               title="Daily average market clearing price")
 fig.update_layout(height=420, margin=dict(t=30))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # --- Regulation capability vs performance split -----------------------------
 reg = sub[sub["service"] == "REG"]
@@ -120,7 +120,7 @@ if not reg.empty and reg[["reg_ccp", "reg_pcp"]].notna().any().any():
                    labels={"day": "Date", "price": "$/MWh", "component": ""},
                    title="Regulation price components (daily avg)")
     fig2.update_layout(height=340, margin=dict(t=30))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 # --- Hour-of-day profile ----------------------------------------------------
 st.subheader("Average MCP by hour of day")
@@ -132,7 +132,7 @@ if not hod.empty:
     fig3.update_xaxes(type="category")
     fig3.update_yaxes(type="category")
     fig3.update_layout(height=max(240, len(hod) * 42 + 120), margin=dict(t=20))
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(fig3, width="stretch")
 
 # --- Summary table + download -----------------------------------------------
 st.subheader("Product summary")
@@ -147,7 +147,7 @@ summ = summ[["service", "product", "avg_mcp", "p95_mcp", "max_mcp", "hours"]].re
 st.dataframe(
     summ.style.format({"Avg MCP": "${:,.2f}", "P95 MCP": "${:,.2f}",
                        "Max MCP": "${:,.2f}", "Hours": "{:,.0f}"}),
-    use_container_width=True, hide_index=True)
+    width="stretch", hide_index=True)
 
 st.download_button(
     "⬇ Download filtered ancillary rows (CSV)",

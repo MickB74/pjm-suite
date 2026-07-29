@@ -50,7 +50,7 @@ for s in statuses:
         "Expected cadence": (f"{cadence}d" if cadence else "manual"),
         "Detail": s.detail,
     })
-st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 # ── Gap detection on the hourly-series datasets ──────────────────────────────
 # A "gap" is a missing hour in a series that's supposed to be continuous.
@@ -119,7 +119,7 @@ for label, path, tcol in HOURLY:
         "Missing hours": f"{missing:,}",
         "Coverage": f"{r['have'] / r['hours_span']:.2%}" if r["hours_span"] else "—",
     })
-st.dataframe(pd.DataFrame(gap_rows), hide_index=True, use_container_width=True)
+st.dataframe(pd.DataFrame(gap_rows), hide_index=True, width="stretch")
 
 with st.expander("What each colour means"):
     st.markdown(

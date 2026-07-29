@@ -258,14 +258,14 @@ with c_left:
                  title="Monthly bill by component")
     fig.update_layout(yaxis={"categoryorder": "total ascending"},
                       height=380, margin=dict(l=10, r=10, t=40, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 with c_right:
     show = bill.copy()
     show["¢/kWh"] = (show["Amount ($)"] / kwh * 100).round(3) if kwh else None
     show["Amount ($)"] = show["Amount ($)"].round(0)
     st.dataframe(
         show,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Amount ($)": st.column_config.NumberColumn(format="$%,.0f"),
@@ -276,7 +276,7 @@ with c_right:
 
 # ── The delivery reference row in play ────────────────────────────────────
 with st.expander("Delivery tariff row used"):
-    st.dataframe(drates[drates["zone"] == zone], use_container_width=True,
+    st.dataframe(drates[drates["zone"] == zone], width="stretch",
                  hide_index=True)
     st.caption("Edit the CSV to correct any EDC's charges; the estimate updates "
                "on the next rerun.")

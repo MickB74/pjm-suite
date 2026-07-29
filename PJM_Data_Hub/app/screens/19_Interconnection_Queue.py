@@ -94,7 +94,7 @@ with tab_now:
                      title="MW by fuel (bar labels = project count)")
         fig.update_traces(textposition="outside")
         fig.update_layout(height=420, margin=dict(t=40))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -105,7 +105,7 @@ with tab_now:
             figs = px.bar(by_state, x="mw", y="state", orientation="h",
                           labels={"mw": "Capacity (MW)", "state": "State"})
             figs.update_layout(height=420, margin=dict(t=20), yaxis=dict(autorange="reversed"))
-            st.plotly_chart(figs, use_container_width=True)
+            st.plotly_chart(figs, width="stretch")
     with col_b:
         st.subheader("Submissions by year")
         if "submitted_date" in sub.columns and sub["submitted_date"].notna().any():
@@ -115,7 +115,7 @@ with tab_now:
             figy = px.bar(yr, x="year", y="mw", color="fuel",
                           labels={"year": "Submitted year", "mw": "Capacity (MW)", "fuel": "Fuel"})
             figy.update_layout(height=420, margin=dict(t=20))
-            st.plotly_chart(figy, use_container_width=True)
+            st.plotly_chart(figy, width="stretch")
 
     st.subheader("Projects")
     show_cols = [c for c in [
@@ -125,7 +125,7 @@ with tab_now:
         "withdrawal_date",
     ] if c in sub.columns]
     table = sub[show_cols].sort_values("mw", ascending=False, na_position="last")
-    st.dataframe(table, use_container_width=True, hide_index=True, height=460)
+    st.dataframe(table, width="stretch", hide_index=True, height=460)
     st.download_button(
         "⬇ Download filtered queue (CSV)",
         table.to_csv(index=False).encode(),
@@ -152,13 +152,13 @@ with tab_time:
                    labels={"snapshot_date": "Snapshot", "active_mw": "Active MW"},
                    title="Active capacity in queue (MW)")
     figt.update_layout(height=360, margin=dict(t=40))
-    m1.plotly_chart(figt, use_container_width=True)
+    m1.plotly_chart(figt, width="stretch")
 
     figc = px.line(trend, x="snapshot_date", y="active", markers=True,
                    labels={"snapshot_date": "Snapshot", "active": "Active projects"},
                    title="Active project count")
     figc.update_layout(height=360, margin=dict(t=40))
-    m2.plotly_chart(figc, use_container_width=True)
+    m2.plotly_chart(figc, width="stretch")
 
     # Active MW by fuel across snapshots
     st.subheader("Active capacity by fuel over time")
@@ -168,7 +168,7 @@ with tab_time:
     figf = px.area(fuel_trend, x="snapshot_date", y="mw", color="fuel",
                    labels={"snapshot_date": "Snapshot", "mw": "Active MW", "fuel": "Fuel"})
     figf.update_layout(height=400, margin=dict(t=20))
-    st.plotly_chart(figf, use_container_width=True)
+    st.plotly_chart(figf, width="stretch")
 
     # Snapshot-to-snapshot diff
     st.subheader("What changed between two snapshots")
@@ -195,4 +195,4 @@ with tab_time:
             if frame.empty:
                 st.caption("None.")
             else:
-                st.dataframe(frame, use_container_width=True, hide_index=True)
+                st.dataframe(frame, width="stretch", hide_index=True)

@@ -96,7 +96,7 @@ fig = px.line(daily, x="day", y="spread", color="pnode_name",
               title="Daily average DA–RT spread")
 fig.add_hline(y=0, line_dash="dot", line_color="#888")
 fig.update_layout(height=400, margin=dict(t=30))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Hour-of-day profile: which hours systematically diverge.
 st.subheader("Average spread by hour of day")
@@ -110,7 +110,7 @@ if not hod.empty:
     fig2.update_xaxes(type="category")
     fig2.update_yaxes(type="category")
     fig2.update_layout(height=max(260, len(hod) * 40 + 120), margin=dict(t=20))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
 # Biggest single-hour misses.
 st.subheader("Largest spread hours")
@@ -119,7 +119,7 @@ worst = (wide.reindex(wide["spread"].abs().sort_values(ascending=False).index)
          .rename(columns={"pnode_name": "hub", "datetime_beginning_ept": "hour (EPT)"}))
 st.dataframe(
     worst.style.format({"DA": "${:,.2f}", "RT": "${:,.2f}", "spread": "${:+,.2f}"}),
-    use_container_width=True, height=420)
+    width="stretch", height=420)
 
 st.download_button(
     "⬇ Download matched DA/RT hours (CSV)",

@@ -98,10 +98,10 @@ if not by_lead.empty:
         yaxis_title="Peak-MW MAPE (%)",
         height=320, margin=dict(l=10, r=10, t=10, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.dataframe(by_lead.rename(columns={
         "lead_days": "Lead (days)", "n": "n", "mape": "MAPE %", "mae_mw": "MAE (MW)"
-    }).round(2), hide_index=True, use_container_width=True)
+    }).round(2), hide_index=True, width="stretch")
 
 # ── Predicted vs actual scatter ─────────────────────────────────────────────
 st.subheader("Predicted vs actual peak (MW)")
@@ -131,7 +131,7 @@ scatter.update_layout(
     yaxis_title="Predicted daily peak (MW)",
     height=440, margin=dict(l=10, r=10, t=10, b=10),
 )
-st.plotly_chart(scatter, use_container_width=True)
+st.plotly_chart(scatter, width="stretch")
 
 # ── Raw scored table (for the curious) ──────────────────────────────────────
 with st.expander("Scored calls (raw)"):
@@ -140,4 +140,4 @@ with st.expander("Scored calls (raw)"):
         "actual_peak_mw", "error_mw", "abs_pct_error",
         "prob_5cp", "was_5cp", "eligible", "extrapolated",
     ]].copy().sort_values(["target_day", "as_of"])
-    st.dataframe(show, hide_index=True, use_container_width=True)
+    st.dataframe(show, hide_index=True, width="stretch")

@@ -175,7 +175,7 @@ st.dataframe(
     show.rename(columns={"day": "Date", "peak_hour_ept": "Peak hr (EPT)",
                          "peak_value": f"Peak ({unit})", "avg_value": f"Day avg ({unit})"})
     .style.format({f"Peak ({unit})": fmt, f"Day avg ({unit})": fmt}),
-    use_container_width=True)
+    width="stretch")
 if unit == "$/MWh":
     st.caption(
         "Real-time hourly LMP — PJM's **energy settlement price** at the hub "
@@ -346,7 +346,7 @@ fig.update_layout(
     yaxis=dict(title="Load (MW)"),
     yaxis2=dict(title="LMP ($/MWh)", overlaying="y", side="right"),
     legend=dict(orientation="h", y=-0.2))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Intraday temperature (ERA5) — the weather behind the peak.
 wx_day = _day_slice(wx_df)
@@ -363,7 +363,7 @@ if not wx_day.empty and wx_day[["temp_f", "apparent_f"]].notna().any().any():
     figw.update_layout(title="Intraday temperature (ERA5, population-weighted PJM)",
                        height=280, margin=dict(t=40), yaxis=dict(title="°F"),
                        legend=dict(orientation="h", y=-0.25))
-    st.plotly_chart(figw, use_container_width=True)
+    st.plotly_chart(figw, width="stretch")
 
 # Intraday fuel mix stack.
 gen_day = _day_slice(gen_df)
@@ -378,7 +378,7 @@ if not gen_day.empty:
                    title="Intraday generation by fuel")
     fig2.add_vline(x=peak_hour, line_dash="dash", line_color="#333")
     fig2.update_layout(height=360, margin=dict(t=40))
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, width="stretch")
 
     # Fuel mix at the peak hour vs. year average.
     peak_gen = gen_day[gen_day["datetime_beginning_ept"] == peak_hour]
@@ -405,7 +405,7 @@ if not gen_day.empty:
             fmt["Year Avg Share"] = "{:.1%}"
         st.caption("Fuel mix at the peak hour vs. selected-period average")
         st.dataframe(show_mix.style.format(fmt),
-                     use_container_width=True, height=300, hide_index=True)
+                     width="stretch", height=300, hide_index=True)
 
 # Ancillary prices across the peak day.
 as_day = _day_slice(as_df)
@@ -419,4 +419,4 @@ if not as_day.empty:
                        title="Intraday ancillary clearing prices (PJM_RTO)")
         fig3.add_vline(x=peak_hour, line_dash="dash", line_color="#333")
         fig3.update_layout(height=340, margin=dict(t=40))
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width="stretch")

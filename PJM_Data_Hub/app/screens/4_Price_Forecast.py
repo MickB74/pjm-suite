@@ -126,7 +126,7 @@ fig.update_layout(
     height=420, margin=dict(t=20),
     legend=dict(orientation="h", yanchor="bottom", y=1.02),
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Key inputs
 col1, col2, col3 = st.columns(3)
@@ -230,7 +230,7 @@ disp = disp.rename(columns={
     "hr_median": "Heat rate", "p10": "P10", "p25": "P25",
     "p50": "P50 (median)", "p75": "P75", "p90": "P90",
     "n_samples": "History pts", "n_eff": "Eff. pts"})
-st.dataframe(disp, use_container_width=True, hide_index=True)
+st.dataframe(disp, width="stretch", hide_index=True)
 
 st.caption(
     "**Methodology:** P50 power price = gas forward × recency-weighted median implied heat rate "

@@ -70,7 +70,7 @@ fig = px.area(daily_long, x="datetime_beginning_ept", y="gen_mw", color="fuel",
               labels={"datetime_beginning_ept": "Date", "gen_mw": "MW", "fuel": "Fuel"},
               title="Daily average generation by fuel")
 fig.update_layout(height=420, margin=dict(t=30))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Summary table + fuel-mix pie
 st.subheader("Average output by fuel")
@@ -84,7 +84,7 @@ tbl_col, pie_col = st.columns([1, 1])
 with tbl_col:
     st.dataframe(
         summary.style.format({"Avg MW": "{:,.0f}", "Share": "{:.1%}"}),
-        use_container_width=True, hide_index=True)
+        width="stretch", hide_index=True)
 
 with pie_col:
     pie = px.pie(
@@ -99,4 +99,4 @@ with pie_col:
         height=420, margin=dict(t=40, b=0, l=0, r=0),
         legend=dict(orientation="v", x=1, y=0.5),
         uniformtext_minsize=10, uniformtext_mode="hide")
-    st.plotly_chart(pie, use_container_width=True)
+    st.plotly_chart(pie, width="stretch")

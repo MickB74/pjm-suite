@@ -71,7 +71,7 @@ fig = px.line(hourly, x="datetime_beginning_ept", y="mw", color="zone",
               labels={"datetime_beginning_ept": "Hour (EPT)", "mw": "Load (MW)", "zone": "Zone"},
               title="Hourly metered load")
 fig.update_layout(height=420, margin=dict(t=30))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Load-duration curve (sorted descending) for each zone.
 st.subheader("Load-duration curve")
@@ -84,7 +84,7 @@ ldc = pd.concat(ldc_frames, ignore_index=True)
 fig2 = px.line(ldc, x="pct_hours", y="mw", color="zone",
                labels={"pct_hours": "% of hours at or above", "mw": "Load (MW)", "zone": "Zone"})
 fig2.update_layout(height=360, margin=dict(t=20))
-st.plotly_chart(fig2, use_container_width=True)
+st.plotly_chart(fig2, width="stretch")
 
 st.download_button(
     "⬇ Download hourly load (CSV)",
