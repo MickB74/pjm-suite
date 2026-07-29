@@ -225,6 +225,19 @@ def save_store(df: pd.DataFrame) -> None:
 
 HOURLY_KEY_COLS = ["datetime_beginning_ept", "zone", "market"]
 
+# DST caveat. Timestamps are naive Eastern (project-wide convention), so on the
+# November fall-back day the 01:00 hour appears twice under the same label and
+# the key above collapses it — 720 hours for November, not 721. This matches
+# the hub-price store, which drops it the same way, so the two are comparable.
+#
+# The *monthly* store is the one that differs: it averages the raw fetch before
+# any de-duplication, so its November rows are over 721 hours. The gap is under
+# $0.08/MWh on a monthly average (~0.2%) and only ever in November. Left alone
+# deliberately — the monthly figures feed Plant Earnings, and silently shifting
+# published history to chase 0.2% is worse than the inconsistency. Anything
+# needing the repeated hour must carry datetime_beginning_utc, which the PJM
+# feed provides but this store does not keep.
+
 
 def load_hourly(market: str | None = "RT", zones: list[str] | None = None) -> pd.DataFrame:
     """Hourly zone LMPs, optionally filtered to one market and/or a zone list.

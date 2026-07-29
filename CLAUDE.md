@@ -47,7 +47,7 @@ PJM_Data_Hub/
 
 ## Conventions
 
-- **Timezone**: All timestamps are naive Eastern Prevailing Time (US/Eastern). Use `pjm_core.tz.localize_eastern()` when tz-aware math is needed.
+- **Timezone**: All timestamps are naive Eastern Prevailing Time (US/Eastern). Use `pjm_core.tz.localize_eastern()` when tz-aware math is needed. Consequence: on the November DST fall-back day the 01:00 hour repeats under one label, so the hourly stores hold 720 hours for November, not 721 — hub and zone prices both drop it. Anything that needs that hour must carry `datetime_beginning_utc` from the PJM feed, which no store currently keeps.
 - **Interval size**: Hourly (unlike ERCOT's 15-min). `settlement.INTERVAL_HOURS = 1.0`.
 - **LMP components**: `total_lmp = energy + congestion + loss`. Always keep all three.
 - **Credentials**: `PJM_Data_Hub/config.json` (git-ignored, chmod 600). Keys: `subscription_key` (PJM Data Miner 2), `eia_api_key` (EIA gas strip). Access via `pjm_core.credentials`.
