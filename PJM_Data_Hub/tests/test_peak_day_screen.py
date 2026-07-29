@@ -54,7 +54,11 @@ def _tips(at) -> list[str]:
 
 
 def _run(zone: str):
+    import streamlit as st
     from streamlit.testing.v1 import AppTest
+    # @st.cache_data outlives an AppTest run, so without this a test that
+    # patches a loader still gets the previous test's memoized real data.
+    st.cache_data.clear()
     at = AppTest.from_file(str(SCREEN), default_timeout=240)
     at.run()
     assert not at.exception, [str(e.value) for e in at.exception]
@@ -110,3 +114,23 @@ def test_zone_load_and_price_cards_describe_the_same_zone():
     cards = _cards(at)
     assert "BC load" in cards, cards
     assert "BGE RT LMP" in cards, cards
+
+
+def test_day_outside_the_zone_store_falls_back_rather_than_going_blank(monkeypatch):
+    """The zone store backfills independently of the load store, so it can be
+    short of older years. A peak day it does not cover must fall back to the hub
+    with a warning — dropping the price card entirely would be strictly worse
+    than the hub default this change replaced."""
+    from datasets.zone_prices import pjm_zone_prices as Z
+
+    real = Z.load_hourly
+    monkeypatch.setattr(
+        Z, "load_hourly",
+        lambda **kw: real(**kw).iloc[:0])   # right columns, no rows for any day
+
+    at = _run("PEP")
+    cards = _cards(at)
+    assert any("RT LMP" in k for k in cards), "price card vanished entirely"
+    assert not any(k.startswith("PEPCO") for k in cards), cards
+    assert any("No PEPCO zonal LMP stored" in c.value for c in at.caption), \
+        [c.value for c in at.caption]

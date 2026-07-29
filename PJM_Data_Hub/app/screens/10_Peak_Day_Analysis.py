@@ -204,9 +204,6 @@ else:
     price_zone = None  # ranking is hub-driven, so show that hub's price
 
 zone_price_df = _load_zone_prices(price_zone) if price_zone else pd.DataFrame()
-# Use the zonal series only if it actually covers this store; otherwise the hub
-# remains the fallback and the label says so.
-use_zone_price = not zone_price_df.empty
 
 st.divider()
 day_choices = ranked["day"].tolist()
@@ -224,6 +221,19 @@ def _day_slice(df, tcol="datetime_beginning_ept"):
     return df[(df[tcol] >= day_start) & (df[tcol] < day_end)]
 
 
+# Decide zonal-vs-hub per *selected day*, not once for the whole store. The
+# hourly zone store backfills independently of the load store, so it can be
+# complete for recent years and short of older ones. Judged store-wide, a peak
+# day outside its span would drop the price card and chart line entirely —
+# strictly worse than the hub fallback it replaced.
+zone_price_day = _day_slice(zone_price_df)
+use_zone_price = not zone_price_day.empty
+if price_zone and not use_zone_price:
+    st.caption(
+        f"⚠️ No {price_zone} zonal LMP stored for {sel_day} — showing "
+        f"{drill_hub} as a reference instead. Run "
+        "`orchestrate.py update zone_prices` to backfill.")
+
 # Coincident-peak KPIs at the peak hour.
 st.subheader(f"Coincident peak — {sel_day} {peak_hour.strftime('%H:00')} EPT")
 
@@ -238,8 +248,7 @@ if not load_hr.empty:
         _kpi_cards.append((f"{drill_zone} load", f"{zone_hr:,.0f} MW" if zone_hr else "—", None))
 
 if use_zone_price:
-    zp_hr = _day_slice(zone_price_df)
-    zp = zp_hr[zp_hr["datetime_beginning_ept"] == peak_hour] if not zp_hr.empty else zp_hr
+    zp = zone_price_day[zone_price_day["datetime_beginning_ept"] == peak_hour]
     if not zp.empty:
         _kpi_cards.append((f"{price_zone} RT LMP",
                            f"${zp['total_lmp'].iloc[0]:,.2f}",
@@ -319,7 +328,7 @@ if not load_day.empty:
         fig.add_trace(go.Scatter(x=g["datetime_beginning_ept"], y=g["mw"],
                                  name=f"{z} load (MW)", mode="lines"))
 if use_zone_price:
-    pg = _day_slice(zone_price_df).sort_values("datetime_beginning_ept")
+    pg = zone_price_day.sort_values("datetime_beginning_ept")
     price_trace_name = f"{price_zone} zone RT ($/MWh)"
 else:
     price_day = _day_slice(prices_df)

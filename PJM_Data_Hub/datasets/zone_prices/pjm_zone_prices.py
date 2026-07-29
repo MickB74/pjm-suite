@@ -461,6 +461,12 @@ def update(progress_callback=None, markets: tuple[str, ...] = ("RT", "DA")) -> d
                 _flush_hourly()
                 log(f"      … hourly store checkpointed ({i}/{len(todo)} months)")
             time.sleep(1.5)
+        # Flush at each market boundary too: with 79 months the 12-month
+        # checkpoint leaves a 7-month tail buffered, which a failure during the
+        # next market would force a re-fetch of.
+        if hourly_dirty:
+            _flush_hourly()
+            log(f"[{market}] hourly store checkpointed ({len(todo)} months).")
 
     _flush_hourly()
 
