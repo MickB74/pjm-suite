@@ -134,11 +134,13 @@ col1.metric("P50 (first month)", f"${df['p50'].iloc[0]:,.2f}/MWh")
 col2.metric("P50 (avg over strip)", f"${df['p50'].mean():,.2f}/MWh")
 col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:,.2f}/MMBtu")
 
-# Whole-strip average distribution — simulated from the correlated gas path,
-# not derived from the monthly bands. Neither shortcut works: averaging the
-# monthly P10s implicitly assumes the months move in lockstep (too wide, ~50
-# vs 38 $/MWh of spread on the current 18-month strip), while treating them as
-# independent diversifies the regime risk away (far too narrow, ~15).
+# Whole-strip average distribution — simulated directly from the correlated
+# gas path. Users may reach for two shortcuts; both are wrong, in opposite
+# directions. Averaging the monthly P10/P90s assumes the months hit their
+# tails simultaneously and runs too wide (~50 vs 38 $/MWh of spread on the
+# current 18-month strip); treating them as independent diversifies the
+# regime risk away and runs far too narrow (~15). The caption calls out
+# only the first, since it is the intuitive move to make from the table below.
 if "strip_p50" in df.columns:
     s10, s50, s90 = (float(df["strip_p10"].iloc[0]), float(df["strip_p50"].iloc[0]),
                      float(df["strip_p90"].iloc[0]))
@@ -146,13 +148,11 @@ if "strip_p50" in df.columns:
         f"**Strip average ({len(df)} months):** P10 **\\${s10:,.2f}** · "
         f"P50 **\\${s50:,.2f}** · P90 **\\${s90:,.2f}** /MWh")
     st.caption(
-        "The distribution of the *average* price over the whole horizon — the "
-        "number to use for an annual or PPA-level view. Don't try to get it by "
-        "averaging the monthly P10–P90 bands: that assumes every month moves in "
-        "lockstep and comes out too wide. Nor are the months independent — a "
-        "gas regime shift moves them together, so the risk doesn't cancel out. "
-        "This band is simulated from the correlated gas path and sits between "
-        "those two extremes.")
+        f"Range of outcomes for the *average* price across all {len(df)} "
+        "months — the number to use for an annual budget or PPA valuation. "
+        "It is **narrower** than what you'd get by averaging the monthly "
+        "P10/P90s in the table below, because the months don't all hit their "
+        "extremes in the same year — the tails partly cancel across the strip.")
 
 gas_source = df["gas_source"].iloc[0] if "gas_source" in df.columns else "unknown"
 if gas_source.startswith("NYMEX strip (vintage"):
