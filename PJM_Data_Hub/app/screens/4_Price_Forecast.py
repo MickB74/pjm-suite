@@ -43,11 +43,18 @@ with st.sidebar:
         help="Re-run the forecast using the Henry Hub strip exactly as it "
              "stood on a past date. One vintage is archived per daily pull, "
              "so this list grows over time.")
+    anchor_vintages = st.select_slider(
+        "Gas anchor window (vintages)", [1, 3, 5, 10], value=5,
+        help="The gas anchor is the per-contract median of this many recent "
+             "strip pulls. A short window rejects bad ticks from the "
+             "unofficial feed; 1 uses the raw single-day settle. Avoid long "
+             "windows — a forward is near-martingale, so averaging over weeks "
+             "just lags real moves.")
     run_btn = st.button("Run forecast", type="primary")
 
-_vintage_kwargs = {}
+_vintage_kwargs = {"anchor_vintages": anchor_vintages}
 if vintage_pick != _LATEST:
-    _vintage_kwargs = {"asof": vintage_pick, "gas_asof": vintage_pick}
+    _vintage_kwargs |= {"asof": vintage_pick, "gas_asof": vintage_pick}
 
 cfg = credentials.load_config()
 eia_key = credentials.get_eia_api_key()
@@ -127,6 +134,26 @@ col1.metric("P50 (first month)", f"${df['p50'].iloc[0]:,.2f}/MWh")
 col2.metric("P50 (avg over strip)", f"${df['p50'].mean():,.2f}/MWh")
 col3.metric("Gas fwd (first month)", f"${df['gas_fwd'].iloc[0]:,.2f}/MMBtu")
 
+# Whole-strip average distribution — simulated from the correlated gas path,
+# not derived from the monthly bands. Neither shortcut works: averaging the
+# monthly P10s implicitly assumes the months move in lockstep (too wide, ~50
+# vs 38 $/MWh of spread on the current 18-month strip), while treating them as
+# independent diversifies the regime risk away (far too narrow, ~15).
+if "strip_p50" in df.columns:
+    s10, s50, s90 = (float(df["strip_p10"].iloc[0]), float(df["strip_p50"].iloc[0]),
+                     float(df["strip_p90"].iloc[0]))
+    st.markdown(
+        f"**Strip average ({len(df)} months):** P10 **\\${s10:,.2f}** · "
+        f"P50 **\\${s50:,.2f}** · P90 **\\${s90:,.2f}** /MWh")
+    st.caption(
+        "The distribution of the *average* price over the whole horizon — the "
+        "number to use for an annual or PPA-level view. Don't try to get it by "
+        "averaging the monthly P10–P90 bands: that assumes every month moves in "
+        "lockstep and comes out too wide. Nor are the months independent — a "
+        "gas regime shift moves them together, so the risk doesn't cancel out. "
+        "This band is simulated from the correlated gas path and sits between "
+        "those two extremes.")
+
 gas_source = df["gas_source"].iloc[0] if "gas_source" in df.columns else "unknown"
 if gas_source.startswith("NYMEX strip (vintage"):
     _source_note = ("Archived Henry Hub strip snapshot from the selected date; "
@@ -134,6 +161,10 @@ if gas_source.startswith("NYMEX strip (vintage"):
 elif gas_source.startswith("NYMEX strip (cached"):
     _source_note = ("Real traded Henry Hub strip pulled from Yahoo at launch and "
                     "cached to CSV; months past the liquid strip mean-revert to $4.")
+elif "vintage median" in gas_source:
+    _source_note = ("Per-contract median of the last few archived strip pulls — "
+                    "rejects a bad tick from the unofficial feed without lagging "
+                    "the market; months past the liquid strip mean-revert to $4.")
 else:
     _source_note = {
     "NYMEX strip (Yahoo Finance, unofficial/delayed)":
@@ -152,33 +183,65 @@ else:
 }.get(gas_source, "")
 st.caption(f"⛽ **Gas curve source:** {gas_source}. {_source_note}")
 
+if "vol_source" in df.columns:
+    vol_source = df["vol_source"].iloc[0]
+    _vol_note = (
+        "Measured straight off the archived strip vintages — the volatility of "
+        "the forward itself, which already carries both the winter shape and "
+        "the fact that near-dated contracts move more than deferred ones."
+        if vol_source.startswith("vintage") else
+        "Mean-reverting model fitted to EIA Henry Hub spot history. Volatility "
+        "is seasonal — a January contract carries roughly twice the delivery-"
+        "month risk of a July one — and saturates with horizon rather than "
+        "growing as √t. Switches to vintage-measured forward vol once enough "
+        "daily strip pulls have accumulated.")
+    st.caption(f"📈 **Gas volatility:** {vol_source}. {_vol_note}")
+
 st.subheader("Forecast table")
 st.caption(
     "One row per forward month. P10–P90 are percentile power prices ($/MWh) "
-    "from the simulation. **History pts** is how many past heat-rate "
-    "observations shaped that month — when it's below 2 the month falls back "
-    "to a default heat rate, so treat those prices as rough until more price "
-    "history accumulates.")
+    "from the simulation. **Gas σ** is the log-volatility applied to gas that "
+    "month — it rises with horizon and with winter delivery risk. **History "
+    "pts** is how many past heat-rate observations shaped that month, and "
+    "**Eff. pts** how many remain after older years are downweighted; when "
+    "History pts is below 2 the month falls back to a default heat rate, so "
+    "treat those prices as rough until more history accumulates.")
 low_history = int((df["n_samples"] < 2).sum())
 if low_history:
     st.warning(
         f"⚠️ {low_history:,} of {len(df):,} months have fewer than 2 historical "
         "heat-rate observations and use a default heat rate. The forecast will "
         "sharpen as the hub price store builds up more months of history.")
-disp = df[["month", "gas_fwd", "p10", "p25", "p50", "p75", "p90", "n_samples"]].copy()
+_cols = ["month", "gas_fwd", "gas_sigma", "hr_median",
+         "p10", "p25", "p50", "p75", "p90", "n_samples", "n_eff"]
+disp = df[[c for c in _cols if c in df.columns]].copy()
 disp["month"] = disp["month"].dt.strftime("%Y-%m")
 for col in ("gas_fwd", "p10", "p25", "p50", "p75", "p90"):
     disp[col] = disp[col].map(lambda x: f"${x:,.2f}")
+if "gas_sigma" in disp:
+    disp["gas_sigma"] = disp["gas_sigma"].map(lambda x: f"{x:.2f}")
+if "hr_median" in disp:
+    disp["hr_median"] = disp["hr_median"].map(lambda x: f"{x:,.1f}")
+if "n_eff" in disp:
+    disp["n_eff"] = disp["n_eff"].map(lambda x: f"{x:,.1f}")
 disp["n_samples"] = disp["n_samples"].map(lambda x: f"{x:,.0f}")
 disp = disp.rename(columns={
-    "month": "Month", "gas_fwd": "Gas fwd $/MMBtu",
-    "p10": "P10", "p25": "P25", "p50": "P50 (median)", "p75": "P75", "p90": "P90",
-    "n_samples": "History pts"})
+    "month": "Month", "gas_fwd": "Gas fwd $/MMBtu", "gas_sigma": "Gas σ",
+    "hr_median": "Heat rate", "p10": "P10", "p25": "P25",
+    "p50": "P50 (median)", "p75": "P75", "p90": "P90",
+    "n_samples": "History pts", "n_eff": "Eff. pts"})
 st.dataframe(disp, use_container_width=True, hide_index=True)
 
 st.caption(
-    "**Methodology:** P50 power price = gas forward × median implied heat rate (historical LMP ÷ HH gas). "
-    "Monte Carlo: lognormal gas (σ = 0.5·√t annualised) × lognormal heat rate (σ from realized distribution). "
-    "Price capped at $2,000/MWh. Gas forward comes from EIA STEO's Henry Hub forecast where available, "
-    "then mean-reverts to $4.00/MMBtu over 24 months beyond STEO's horizon."
+    "**Methodology:** P50 power price = gas forward × recency-weighted median implied heat rate "
+    "(historical LMP ÷ HH gas, with older years downweighted on a 3-year half-life so the current "
+    "fleet drives the anchor). Monte Carlo: gas is drawn as a *correlated path* across the horizon "
+    "(Ornstein-Uhlenbeck, κ = 0.29/yr) rather than independently per month, so a regime shift moves "
+    "the whole strip together. Gas volatility is seasonal in the delivery month and saturates with "
+    "horizon instead of growing as √t. Power passes through 90% of a gas move, not 100% — the "
+    "measured DOM Hub elasticity — because the implied heat rate compresses when gas rallies. "
+    # Escape the dollars: a pair of bare $ in one markdown string turns into LaTeX math mode.
+    "Price capped at \\$2,000/MWh. The gas anchor is the per-contract median of recent NYMEX strip "
+    "pulls, falling back to EIA STEO's Henry Hub forecast, then mean-reverting to \\$4.00/MMBtu "
+    "beyond the liquid strip."
 )

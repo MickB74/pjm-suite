@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 
 from pjm_core import paths
@@ -72,6 +73,99 @@ def strip_asof(when) -> tuple[pd.DataFrame, pd.Timestamp] | None:
             .assign(month=lambda d: pd.to_datetime(d["month"]))
             .sort_values("month").reset_index(drop=True))
     return snap, vintage
+
+
+# ── Median anchor ────────────────────────────────────────────────────────────
+# The strip source is an unofficial Yahoo feed and deferred NG contracts are
+# illiquid enough to throw the occasional bad tick. Taking the per-contract
+# median of the last few vintages rejects those outliers at almost no cost in
+# lag — a forward is near-martingale, so a *long* trailing average would just
+# lag genuine moves (Dec-25 $4.26 → Jan-26 $7.72). Hence a short window, and a
+# max-age guard so a stale curve is never blended with a current one.
+
+ANCHOR_VINTAGES = 5     # contract-month median taken over this many vintages
+ANCHOR_MAX_AGE_DAYS = 14  # ignore vintages older than this vs. the newest used
+
+
+def strip_median(
+    when=None,
+    n: int = ANCHOR_VINTAGES,
+    max_age_days: int = ANCHOR_MAX_AGE_DAYS,
+) -> tuple[pd.DataFrame, pd.Timestamp, int] | None:
+    """Per-contract-month median of the last `n` vintages on or before `when`.
+
+    Returns ([month, gas_price], newest_vintage_used, n_vintages_used), or
+    None if there is no history at all / nothing on or before `when`. With a
+    single eligible vintage this degrades to exactly `strip_asof`.
+
+    Vintages more than `max_age_days` older than the newest eligible one are
+    dropped, so a gap in the daily pull can't blend a months-old curve into
+    today's anchor.
+    """
+    hist = history()
+    if hist is None or hist.empty:
+        return None
+    asofs = pd.to_datetime(hist["asof"])
+    eligible = asofs[asofs <= pd.Timestamp(when).normalize()] if when is not None else asofs
+    if eligible.empty:
+        return None
+    newest = eligible.max()
+    cutoff = newest - pd.Timedelta(float(max_age_days), unit="D")
+    keep = sorted(eligible[eligible >= cutoff].unique())[-n:]
+    snap = hist[asofs.isin(keep)].copy()
+    snap["month"] = pd.to_datetime(snap["month"])
+    med = (snap.groupby("month", as_index=False)["gas_price"].median()
+           .sort_values("month").reset_index(drop=True))
+    return med, newest, len(keep)
+
+
+# ── Forward volatility from the archive ──────────────────────────────────────
+
+MIN_VINTAGES_FOR_VOL = 30   # below this the per-contract vol estimate is noise
+TRADING_DAYS = 252
+
+
+def forward_vol(
+    when=None,
+    min_vintages: int = MIN_VINTAGES_FOR_VOL,
+) -> dict[pd.Timestamp, float] | None:
+    """Annualised log-return volatility of each contract month's forward price,
+    measured directly from the vintage archive.
+
+    This is the number the Monte Carlo actually wants: how much the *forward*
+    for a given delivery month moves, which already embeds both the seasonal
+    shape (winter contracts move more) and the Samuelson effect (near-dated
+    contracts move more than deferred ones). Returns None until enough
+    vintages have accumulated, in which case callers should fall back to the
+    seasonal/OU model calibrated off spot history.
+
+    Returned vols are *instantaneous* — the terminal dispersion of month m seen
+    from now is roughly ``vol[m] * sqrt(years_to_delivery)``.
+    """
+    hist = history()
+    if hist is None or hist.empty:
+        return None
+    asofs = pd.to_datetime(hist["asof"])
+    hist = hist[asofs <= pd.Timestamp(when).normalize()] if when is not None else hist
+    if hist.empty or hist["asof"].nunique() < min_vintages:
+        return None
+    wide = (hist.assign(asof=pd.to_datetime(hist["asof"]),
+                        month=pd.to_datetime(hist["month"]))
+            .pivot_table(index="asof", columns="month", values="gas_price")
+            .sort_index())
+    # Pulls can be missed, so vintages aren't necessarily consecutive days.
+    # Normalise each return to a 1-day move before taking the std, otherwise a
+    # gap in the archive reads as a volatility spike.
+    gap_days = wide.index.to_series().diff().dt.days.clip(lower=1)
+    rets = np.log(wide).diff().div(np.sqrt(gap_days), axis=0)
+    out = {}
+    for month in wide.columns:
+        r = rets[month].dropna()
+        if len(r) >= min_vintages - 1:
+            sd = float(r.std())
+            if sd > 0:
+                out[pd.Timestamp(month)] = sd * (TRADING_DAYS ** 0.5)
+    return out or None
 
 
 def _append_history(df: pd.DataFrame, asof: pd.Timestamp, log=print) -> None:

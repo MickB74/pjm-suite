@@ -43,7 +43,7 @@ PJM_Data_Hub/
 - **Python 3.12+**, venv at `PJM_Data_Hub/.venv`
 - Key deps: `pandas`, `pyarrow`, `streamlit`, `plotly`, `gridstatus`, `numpy`, `requests`, `yfinance`, `openpyxl`, `curl_cffi` (browser-TLS client for the ICE forward-curve pull)
 - Install: `cd PJM_Data_Hub && .venv/bin/pip install -r requirements.txt`
-- No test suite currently
+- Tests: `cd PJM_Data_Hub && .venv/bin/python -m pytest tests/ -q` (pure-unit, no network or data lake required — the forecast tests stub the EIA/parquet inputs)
 
 ## Conventions
 
@@ -55,6 +55,11 @@ PJM_Data_Hub/
 - **Screens**: Numbered `NN_Name.py` in `app/screens/`. Sidebar order and grouping are **not** the filename prefix — they're defined explicitly by the `st.navigation({...})` dict in `app/Home.py`, keyed by section ("Start Here", "Explore", "Capacity & Peaks", "Analyze"). Each page's URL slug also comes from its `st.Page(..., title=...)` there.
 - **Data lake**: Parquet files under `PJM_Data_Hub/data/` with `.last_update.json` freshness markers.
 - **Gas strip vintages**: every `gas_strip.update()` pull is also archived to `data/gas/henry_hub_strip_history.parquet` (one snapshot per day, keyed by `asof`). `gas_strip.strip_asof(date)` returns the strip as it stood on a date; `price_forecast.run(asof=d, gas_asof=d)` re-runs the forecast from that vintage (Price Forecast screen → "Gas strip vintage" picker). A missing vintage raises — never silently substitute today's strip in a backtest.
+- **Gas anchor**: the forecast anchors on `gas_strip.strip_median()` — the per-contract median of the last 5 vintages, not a single day's settle — which rejects bad ticks from the unofficial Yahoo feed. Keep the window short: a forward is near-martingale, so averaging over weeks lags real moves rather than smoothing noise. `anchor_vintages=1` gives the raw settle.
+- **Gas volatility**: seasonal in the *delivery* month (a January contract carries ~2x a July one) and mean-reverting in horizon (`_gas_terminal_sigma`, OU with κ = 0.29/yr), not a flat σ·√t. Seasonality scales only the final `DELIVERY_WINDOW_YEARS` of variance — multiplying the whole accumulated path puts σ ≈ 1.2 on a far-out January, which implies a P50 at half the forward. Constants are fitted to EIA Henry Hub spot; `gas_strip.forward_vol()` supersedes them per-contract once ~30 vintages exist.
+- **Gas → power pass-through**: modelled as a structural elasticity (`GAS_PASS_THROUGH_BETA = 0.90`, measured on DOM Hub), *not* a correlation between the gas and heat-rate shocks — a fixed correlation lets the implied β drift with the ratio of the two σ's. A plain product of independent lognormals implies β = 1.0 and overstates the band.
+- **Cross-month correlation**: gas is drawn as one OU-correlated path across the horizon, so `run()` also returns `strip_p10/p50/p90` — the distribution of the *horizon-average* price. Use those for annual/PPA-level numbers; don't derive them from the monthly bands. Averaging the monthly P10/P90s assumes lockstep months and runs too wide; independent monthly draws diversify the regime risk away and run far too narrow (on the current 18-month strip: 50 / 38 / 15 $/MWh of spread respectively).
+- **Heat rate**: recency-weighted per calendar month (3-year half-life, `HR_RECENCY_HALFLIFE_YEARS`). The DOM Hub fleet has shifted enough (coal retirement, solar, data-centre load) that pooling 2020 with 2025 anchors the P50 too low.
 - **Primary hub**: `DOMINION HUB` — defined in `pjm_core.settlement_points.PRIMARY_HUB`.
 - **Settlement math**: Offtaker-signed (positive = offtaker receives). See `pjm_core/settlement.py`.
 
