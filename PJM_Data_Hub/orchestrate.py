@@ -4,7 +4,7 @@
 Usage:
     python orchestrate.py update hub_prices                 # all hubs, RT + DA LMPs
     python orchestrate.py update hub_prices --primary-only  # DOMINION HUB only
-    python orchestrate.py update zone_prices                # monthly avg LMP per zone
+    python orchestrate.py update zone_prices                # hourly + monthly LMP per zone
     python orchestrate.py update system_gen                 # PJM fuel mix (gridstatus)
     python orchestrate.py update load                       # hourly metered load by zone
     python orchestrate.py update ancillary                  # reserve + regulation prices

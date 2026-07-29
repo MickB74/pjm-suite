@@ -32,7 +32,7 @@ from pjm_core import paths
 # only to colour freshness; the actual pull cadence is up to orchestrate/cron.
 CADENCE_DAYS = {
     "hub_prices": 1,
-    "zone_prices": 30,      # monthly rollup
+    "zone_prices": 1,       # hourly store, same cadence as hub_prices
     "load": 1,
     "ancillary": 1,
     "weather": 1,           # ERA5 reanalysis lags ~5 days; ok if a bit behind
@@ -50,7 +50,7 @@ CADENCE_DAYS = {
 # Per-dataset human labels for the UI.
 LABELS = {
     "hub_prices": "Hub LMPs (hourly)",
-    "zone_prices": "Zone LMPs (monthly avg)",
+    "zone_prices": "Zone LMPs (hourly + monthly)",
     "load": "System load (hourly)",
     "ancillary": "Ancillary services",
     "weather": "Weather (ERA5)",

@@ -31,7 +31,7 @@ LMP_COMPONENT_HELP = (
 # so they're fast when the store is already current.
 _AUTO_REFRESH_TASKS = [
     ("Hub prices", "datasets.hub_prices.pjm_api", "update", True),
-    ("Zone LMPs (monthly)", "datasets.zone_prices.pjm_zone_prices", "update", True),
+    ("Zone LMPs (hourly)", "datasets.zone_prices.pjm_zone_prices", "update", True),
     ("Ancillary services", "datasets.ancillary.pjm_as", "update", True),
     ("System load", "datasets.load.pjm_load", "update", True),
     ("Weather (ERA5)", "datasets.weather.pjm_weather", "update", False),

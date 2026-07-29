@@ -25,10 +25,12 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from pjm_core import paths, prices as PX
-from pjm_core.settlement_points import PRIMARY_HUB, HUB_LOAD_ZONE, ZONE_HOME_HUB
+from pjm_core.settlement_points import (
+    PRIMARY_HUB, HUB_LOAD_ZONE, ZONE_HOME_HUB, LOAD_ZONE_PRICE_ZONE)
 from datasets.load import pjm_load
 from datasets.ancillary import pjm_as
 from datasets.weather import pjm_weather
+from datasets.zone_prices import pjm_zone_prices
 
 try:
     from datasets.system_gen_by_fuel.pjm_gen import load as load_gen, FUEL_COLS
@@ -75,6 +77,16 @@ def _load_as() -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def _load_wx() -> pd.DataFrame:
     return pjm_weather.weighted_temp()
+
+
+@st.cache_data(show_spinner=True)
+def _load_zone_prices(price_zone: str) -> pd.DataFrame:
+    """Hourly RT LMP for one PJM load zone. Empty if the store has no rows for
+    it yet (the hourly zone store backfills separately from the monthly one)."""
+    try:
+        return pjm_zone_prices.load_hourly(market="RT", zones=[price_zone])
+    except Exception:
+        return pd.DataFrame()
 
 
 load_df = _load_load()
@@ -174,14 +186,27 @@ if unit == "$/MWh":
 
 # --- Drill into one peak day ------------------------------------------------
 # The drill-down follows whichever control drove the ranking: the selected
-# load zone (Load peak) or the selected hub (Price peak). The other side is
-# inferred where a natural counterpart exists — broad aggregate hubs have none.
+# load zone (Load peak) or the selected hub (Price peak).
+#
+# On the Load-peak side the price shown is the *selected zone's own* hourly LMP,
+# not a hub's. Only 6 of PJM's 22 load zones have a namesake trading hub, so
+# falling back to PRIMARY_HUB (as this once did) paired e.g. PEPCO load with a
+# Virginia price and labelled it as coincident. `price_zone` is None for RTO and
+# OVEC, which genuinely have no zonal LMP — those fall back to a hub, labelled
+# as a reference rather than as the zone's price.
 if basis == "Load peak":
     drill_zone = metric_zone
+    price_zone = LOAD_ZONE_PRICE_ZONE.get(metric_zone)
     drill_hub = ZONE_HOME_HUB.get(metric_zone, PRIMARY_HUB)
 else:
     drill_hub = metric_hub or PRIMARY_HUB
     drill_zone = HUB_LOAD_ZONE.get(drill_hub)
+    price_zone = None  # ranking is hub-driven, so show that hub's price
+
+zone_price_df = _load_zone_prices(price_zone) if price_zone else pd.DataFrame()
+# Use the zonal series only if it actually covers this store; otherwise the hub
+# remains the fallback and the label says so.
+use_zone_price = not zone_price_df.empty
 
 st.divider()
 day_choices = ranked["day"].tolist()
@@ -190,7 +215,7 @@ sel_day = st.selectbox("Dissect a peak day", day_choices,
 peak_hour = pd.to_datetime(ranked.loc[ranked["day"] == sel_day, "peak_hour"].iloc[0])
 
 day_start = pd.Timestamp(sel_day)
-day_end = day_start + pd.Timedelta(days=1)
+day_end = day_start + pd.Timedelta(1.0, unit="D")
 
 
 def _day_slice(df, tcol="datetime_beginning_ept"):
@@ -212,14 +237,28 @@ if not load_hr.empty:
         zone_hr = load_hr[(load_hr["zone"] == drill_zone) & (load_hr["datetime_beginning_ept"] == peak_hour)]["mw"].sum()
         _kpi_cards.append((f"{drill_zone} load", f"{zone_hr:,.0f} MW" if zone_hr else "—", None))
 
-price_hr = _day_slice(prices_df)
-if not price_hr.empty:
-    ph = price_hr[(price_hr["pnode_name"] == drill_hub)
-                  & (price_hr["market"] == "RT")
-                  & (price_hr["datetime_beginning_ept"] == peak_hour)]
-    if not ph.empty:
-        _hub_short = drill_hub.replace(" HUB", "").title()
-        _kpi_cards.append((f"{_hub_short} RT LMP", f"${ph['total_lmp'].iloc[0]:,.2f}", None))
+if use_zone_price:
+    zp_hr = _day_slice(zone_price_df)
+    zp = zp_hr[zp_hr["datetime_beginning_ept"] == peak_hour] if not zp_hr.empty else zp_hr
+    if not zp.empty:
+        _kpi_cards.append((f"{price_zone} RT LMP",
+                           f"${zp['total_lmp'].iloc[0]:,.2f}",
+                           f"{drill_zone} zone's own zonal LMP"))
+else:
+    price_hr = _day_slice(prices_df)
+    if not price_hr.empty:
+        ph = price_hr[(price_hr["pnode_name"] == drill_hub)
+                      & (price_hr["market"] == "RT")
+                      & (price_hr["datetime_beginning_ept"] == peak_hour)]
+        if not ph.empty:
+            _hub_short = drill_hub.replace(" HUB", "").title()
+            # On the Load-peak side this hub is a stand-in, not the zone's own
+            # price — say so rather than implying the two are coincident.
+            _tip = None
+            if basis == "Load peak" and drill_zone not in HUB_LOAD_ZONE.values():
+                _tip = f"Reference hub — no zonal LMP for {drill_zone}"
+            _kpi_cards.append((f"{_hub_short} RT LMP",
+                               f"${ph['total_lmp'].iloc[0]:,.2f}", _tip))
 
 as_hr = _day_slice(as_df)
 if not as_hr.empty:
@@ -279,14 +318,18 @@ if not load_day.empty:
              .groupby("datetime_beginning_ept", as_index=False)["mw"].sum())
         fig.add_trace(go.Scatter(x=g["datetime_beginning_ept"], y=g["mw"],
                                  name=f"{z} load (MW)", mode="lines"))
-price_day = _day_slice(prices_df)
-if not price_day.empty:
+if use_zone_price:
+    pg = _day_slice(zone_price_df).sort_values("datetime_beginning_ept")
+    price_trace_name = f"{price_zone} zone RT ($/MWh)"
+else:
+    price_day = _day_slice(prices_df)
     pg = (price_day[(price_day["pnode_name"] == drill_hub) & (price_day["market"] == "RT")]
-          .sort_values("datetime_beginning_ept"))
-    if not pg.empty:
-        fig.add_trace(go.Scatter(x=pg["datetime_beginning_ept"], y=pg["total_lmp"],
-                                 name=f"{drill_hub} RT ($/MWh)", mode="lines",
-                                 yaxis="y2", line=dict(dash="dot", color="#d62728")))
+          .sort_values("datetime_beginning_ept") if not price_day.empty else pd.DataFrame())
+    price_trace_name = f"{drill_hub} RT ($/MWh)"
+if not pg.empty:
+    fig.add_trace(go.Scatter(x=pg["datetime_beginning_ept"], y=pg["total_lmp"],
+                             name=price_trace_name, mode="lines",
+                             yaxis="y2", line=dict(dash="dot", color="#d62728")))
 fig.add_vline(x=peak_hour, line_dash="dash", line_color="#888")
 fig.update_layout(
     title="Intraday load & price",

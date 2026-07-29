@@ -27,13 +27,6 @@ HUBS = [
     "WEST INT HUB",      # Western interface hub
 ]
 
-# PJM load zones (used for zone-settled contracts)
-ZONES = [
-    "AEP", "APS", "ATC", "BGE", "COMED", "DAY", "DEOK", "DOM",
-    "DPL", "DUQ", "EKPC", "JCPL", "METED", "PECO", "PENELEC",
-    "PEPCO", "PPL", "PSEG", "RECO",
-]
-
 # PJM zone pnode IDs, as published in the da_hrl_lmps / rt_hrl_lmps feed
 # (type == "ZONE"). These are the load/transmission zones plants settle within;
 # used to value plant generation by location in the Plant Earnings estimate.
@@ -61,6 +54,12 @@ ZONE_PNODE_IDS = {
     "RECO":    7633629,
 }
 
+# PJM load zones (used for zone-settled contracts). Derived from the pnode map
+# above rather than hand-listed: the hand-maintained version had drifted, adding
+# ATC (an MISO transmission company, not a PJM zone) while missing AECO and
+# ATSI, both of which the LMP feed does publish.
+ZONES = sorted(ZONE_PNODE_IDS)
+
 # The primary hub for this suite
 PRIMARY_HUB = "DOMINION HUB"
 
@@ -82,9 +81,46 @@ HUB_LOAD_ZONE = {
 
 # Reverse lookup: the hub that best represents a load zone's price. Where
 # several hubs share a home zone, the first (the main trading hub) wins.
+#
+# NOTE: this covers only the 6 load zones that have a namesake trading hub. It
+# is *not* a general "price for this zone" lookup — most zones have no hub, and
+# defaulting them to PRIMARY_HUB would pair (say) PEPCO load with a Virginia
+# price. Use LOAD_ZONE_PRICE_ZONE below to get a zone's own LMP instead.
 ZONE_HOME_HUB: dict[str, str] = {}
 for _hub, _zone in HUB_LOAD_ZONE.items():
     ZONE_HOME_HUB.setdefault(_zone, _hub)
+
+# PJM's hourly metered-load feed uses short zone codes (PEP, CE, BC …) while
+# the LMP feed publishes the same zones under their long names (PEPCO, COMED,
+# BGE …). This maps load-feed code → LMP-feed zone so a zone's load and its own
+# price can be lined up.
+#
+# RTO and OVEC are deliberately absent: RTO is the system-wide load aggregate
+# with no single zonal LMP, and OVEC is a generation entity that appears in the
+# load feed but has no load zone price. Callers must handle a missing key
+# rather than substituting an unrelated zone.
+LOAD_ZONE_PRICE_ZONE = {
+    "AE": "AECO",        # Atlantic City Electric
+    "AEP": "AEP",
+    "AP": "APS",         # Allegheny Power / Potomac Edison
+    "ATSI": "ATSI",
+    "BC": "BGE",         # Baltimore Gas & Electric
+    "CE": "COMED",       # Commonwealth Edison
+    "DAY": "DAY",
+    "DEOK": "DEOK",
+    "DOM": "DOM",
+    "DPL": "DPL",
+    "DUQ": "DUQ",
+    "EKPC": "EKPC",
+    "JC": "JCPL",        # Jersey Central Power & Light
+    "ME": "METED",       # Metropolitan Edison
+    "PE": "PECO",
+    "PEP": "PEPCO",
+    "PL": "PPL",
+    "PN": "PENELEC",     # Pennsylvania Electric
+    "PS": "PSEG",
+    "RECO": "RECO",      # Rockland Electric
+}
 
 # Approximate lat/lon for each trading hub, used for map visualizations.
 # These are representative points within each hub's zone, not exact

@@ -55,6 +55,12 @@ ZONE_PRICES_PARQUET = ZONE_PRICES_DIR / "pjm_zone_lmp_monthly.parquet"
 ZONE_PRICES_CSV = ZONE_PRICES_DIR / "pjm_zone_lmp_monthly.csv"
 ZONE_PRICES_STATE = ZONE_PRICES_DIR / ".last_update.json"
 
+# The same zone LMPs at full hourly resolution — the monthly file above is
+# derived from this. Needed wherever a zone's price at a *specific hour* matters
+# (e.g. the coincident-peak view), since no hub price stands in for a zone.
+# No CSV twin: this runs to millions of rows.
+ZONE_PRICES_HOURLY_PARQUET = ZONE_PRICES_DIR / "pjm_zone_lmp_hourly.parquet"
+
 # Plant → PJM zone overrides (user-maintained crosswalk, keyed by EIA plant_id).
 # Refines the state-based default mapping for individual plants. Editable in-app.
 PLANT_ZONE_OVERRIDES_CSV = ZONE_PRICES_DIR / "plant_zone_overrides.csv"

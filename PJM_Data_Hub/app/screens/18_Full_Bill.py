@@ -32,7 +32,6 @@ import streamlit as st
 
 from pjm_core import paths, delivery, capacity
 from pjm_core import prices as PX
-from pjm_core.settlement_points import ZONES
 
 st.title("🧮 Full Bill Estimator")
 st.caption("Build a complete monthly bill for a large C&I customer — supply "

@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""PJM zone LMP downloader → monthly average per zone × market.
+"""PJM zone LMP downloader → hourly rows plus a monthly average per zone × market.
 
-Values EIA-923 *monthly* plant generation at a *locational* price. Since the
-plant side is monthly (one net-generation figure per plant × fuel × month),
-the price side only needs monthly resolution, so this fetches hourly zone LMPs
-from PJM Data Miner 2 and stores the **monthly mean** per zone × market:
+Fetches hourly zone LMPs from PJM Data Miner 2 and writes two stores:
 
+    data/zone_prices/pjm_zone_lmp_hourly.parquet    (hour × zone × market)
     data/zone_prices/pjm_zone_lmp_monthly.parquet   (zone × month × market)
     data/zone_prices/pjm_zone_lmp_monthly.csv
 
-One row per (zone, year, month, market) with avg total_lmp / energy /
-congestion / loss and the hour count backing the average. Incremental: past
-months are kept; the current and previous month are always refreshed (they are
-still settling), and any missing months back to ``backfill_start`` are filled.
+The monthly mean values EIA-923 *monthly* plant generation at a *locational*
+price — one row per (zone, year, month, market) with avg total_lmp / energy /
+congestion / loss and the hour count backing the average. The hourly store
+backs anything that needs a zone's price at a *specific hour*, such as the
+coincident-peak view: most PJM load zones have no namesake trading hub, so
+there is no hub price that can stand in for them.
+
+Incremental: past months are kept; the current and previous month are always
+refreshed (they are still settling), and any missing months back to
+``backfill_start`` are filled. A month is re-fetched when *either* store is
+missing it, so adding the hourly store triggers its own backfill without
+disturbing the monthly one.
 
 Shares the PJM subscription key and the chunked / paginated / 429-retry request
 pattern with datasets/hub_prices/pjm_api.py — kept parallel on purpose.
@@ -211,6 +217,78 @@ def save_store(df: pd.DataFrame) -> None:
     df.to_csv(paths.ZONE_PRICES_CSV, index=False)
 
 
+# ── Hourly store ─────────────────────────────────────────────────────────────
+# The monthly file is an average; anything that asks "what did this zone cost at
+# the peak hour" needs the hourly rows the fetch already returns. Kept as a
+# separate parquet (no CSV — millions of rows) so the monthly store's shape and
+# consumers are untouched.
+
+HOURLY_KEY_COLS = ["datetime_beginning_ept", "zone", "market"]
+
+
+def load_hourly(market: str | None = "RT", zones: list[str] | None = None) -> pd.DataFrame:
+    """Hourly zone LMPs, optionally filtered to one market and/or a zone list.
+
+    Columns: datetime_beginning_ept, zone, market, total_lmp, energy,
+    congestion, loss. Empty DataFrame when the store does not exist yet.
+    """
+    p = paths.ZONE_PRICES_HOURLY_PARQUET
+    if not p.exists():
+        return pd.DataFrame()
+    filters = []
+    if market:
+        filters.append(("market", "==", market))
+    if zones:
+        filters.append(("zone", "in", list(zones)))
+    df = pd.read_parquet(p, filters=filters or None)
+    if not df.empty:
+        df["datetime_beginning_ept"] = pd.to_datetime(df["datetime_beginning_ept"])
+    return df.reset_index(drop=True)
+
+
+def save_hourly(df: pd.DataFrame) -> None:
+    paths.ZONE_PRICES_DIR.mkdir(parents=True, exist_ok=True)
+    # Sorted market → zone → time, not time-first: the dominant read is "one
+    # zone's whole history" (load_hourly), and clustering a zone's rows into
+    # contiguous row groups lets the parquet filter skip most of the file.
+    df = (df.drop_duplicates(subset=HOURLY_KEY_COLS, keep="last")
+          .sort_values(["market", "zone", "datetime_beginning_ept"])
+          .reset_index(drop=True))
+    df.to_parquet(paths.ZONE_PRICES_HOURLY_PARQUET, index=False)
+
+
+HOURLY_COMPLETE_FRAC = 0.90
+
+
+def _hourly_months() -> set[tuple[int, int, str]]:
+    """(year, month, market) tuples the hourly store already holds *in full*.
+
+    Completeness is judged on distinct hours against the calendar month, not on
+    mere presence: a month left half-fetched by an interrupted backfill would
+    otherwise be treated as done and never filled in. The threshold is below
+    100% because the archived↔live cutoff month legitimately loses one day.
+    """
+    p = paths.ZONE_PRICES_HOURLY_PARQUET
+    if not p.exists():
+        return set()
+    try:
+        df = pd.read_parquet(p, columns=["datetime_beginning_ept", "market"])
+    except Exception:
+        return set()
+    if df.empty:
+        return set()
+    dt = pd.to_datetime(df["datetime_beginning_ept"])
+    counted = (pd.DataFrame({"year": dt.dt.year, "month": dt.dt.month,
+                             "market": df["market"], "hour": dt})
+               .groupby(["year", "month", "market"])["hour"].nunique())
+    out = set()
+    for (yr, mo, mkt), n_hours in counted.items():
+        expected = pd.Period(f"{yr}-{mo:02d}").days_in_month * 24
+        if n_hours >= HOURLY_COMPLETE_FRAC * expected:
+            out.add((int(yr), int(mo), mkt))
+    return out
+
+
 def read_state() -> dict:
     p = paths.ZONE_PRICES_STATE
     if p.exists():
@@ -274,6 +352,20 @@ def store_summary() -> dict:
     info["end"] = str(stamp.max().date())
     info["zones"] = sorted(df["zone"].unique().tolist())
     info["markets"] = sorted(df["market"].unique().tolist())
+
+    info["hourly_exists"] = paths.ZONE_PRICES_HOURLY_PARQUET.exists()
+    info["hourly_rows"] = 0
+    if info["hourly_exists"]:
+        try:
+            hh = pd.read_parquet(paths.ZONE_PRICES_HOURLY_PARQUET,
+                                 columns=["datetime_beginning_ept"])
+            info["hourly_rows"] = len(hh)
+            if len(hh):
+                dt = pd.to_datetime(hh["datetime_beginning_ept"])
+                info["hourly_start"] = str(dt.min())
+                info["hourly_end"] = str(dt.max())
+        except Exception:
+            pass
     return info
 
 
@@ -300,29 +392,63 @@ def update(progress_callback=None, markets: tuple[str, ...] = ("RT", "DA")) -> d
     if not existing.empty:
         have = set(map(tuple, existing[["year", "month"]].drop_duplicates().to_numpy().tolist()))
 
+    have_hourly = _hourly_months()
+    hourly_existing = load_hourly(market=None)
+
     frames = []
+    hourly_frames = []
+    hourly_dirty = False
+
+    def _flush_hourly() -> None:
+        """Merge whatever hourly months we have so far into the store.
+
+        Flushed periodically rather than once at the end: the first full
+        backfill is ~2M rows over 150+ requests, and a mid-run failure should
+        not throw away everything already fetched.
+        """
+        nonlocal hourly_frames, hourly_existing, hourly_dirty
+        if not hourly_frames:
+            return
+        hourly_existing = pd.concat([hourly_existing, *hourly_frames], ignore_index=True)
+        hourly_frames = []
+        save_hourly(hourly_existing)
+        hourly_existing = load_hourly(market=None)
+        hourly_dirty = False
+
     for market in markets:
         have_mkt = have if existing.empty else set(
             map(tuple, existing.loc[existing["market"] == market, ["year", "month"]]
                 .drop_duplicates().to_numpy().tolist()))
-        todo = [ym for ym in all_months if ym in trailing or ym not in have_mkt]
+        # A month is fetched if *either* store needs it. The hourly store is
+        # newer than the monthly one, so on its first run it drives a full
+        # backfill even though the monthly store is already complete.
+        todo = [ym for ym in all_months
+                if ym in trailing
+                or ym not in have_mkt
+                or (ym[0], ym[1], market) not in have_hourly]
         if not todo:
             log(f"[{market}] up to date.")
             continue
+        n_hourly = sum(1 for ym in todo if (ym[0], ym[1], market) not in have_hourly)
         log(f"[{market}] fetching {len(todo)} month(s): "
-            f"{todo[0][0]}-{todo[0][1]:02d} → {todo[-1][0]}-{todo[-1][1]:02d}")
+            f"{todo[0][0]}-{todo[0][1]:02d} → {todo[-1][0]}-{todo[-1][1]:02d}"
+            + (f" ({n_hourly} needed for the hourly store)" if n_hourly else ""))
         # Walk newest → oldest so that hitting PJM's archive wall lets us stop
         # (everything older is archived too) without skipping recent months.
-        for (yr, mo) in sorted(todo, reverse=True):
+        for i, (yr, mo) in enumerate(sorted(todo, reverse=True), start=1):
             m_start, m_end = _month_bounds(yr, mo, today)
             log(f"    {yr}-{mo:02d} ({m_start} → {m_end}) …")
             try:
                 hourly = _fetch_hourly(key, m_start, m_end, market=market, log=log)
-                monthly = _to_monthly(hourly)
                 # The inclusive day-range pulls the next month's 00:00 boundary
                 # hour; keep only rows for the month we asked for.
-                if not monthly.empty:
-                    monthly = monthly[(monthly["year"] == yr) & (monthly["month"] == mo)]
+                if not hourly.empty:
+                    dt = hourly["datetime_beginning_ept"]
+                    hourly = hourly[(dt.dt.year == yr) & (dt.dt.month == mo)]
+                if not hourly.empty:
+                    hourly_frames.append(hourly)
+                    hourly_dirty = True
+                monthly = _to_monthly(hourly)
                 if not monthly.empty:
                     frames.append(monthly)
                     log(f"      {int(monthly['hours'].sum()):,} zone-hours → "
@@ -331,7 +457,12 @@ def update(progress_callback=None, markets: tuple[str, ...] = ("RT", "DA")) -> d
                     log("      0 rows")
             except Exception as e:  # noqa: BLE001
                 log(f"      month failed: {e}")
+            if hourly_dirty and i % 12 == 0:
+                _flush_hourly()
+                log(f"      … hourly store checkpointed ({i}/{len(todo)} months)")
             time.sleep(1.5)
+
+    _flush_hourly()
 
     fetched = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     combined = (pd.concat([existing, fetched], ignore_index=True)
@@ -353,8 +484,16 @@ def update(progress_callback=None, markets: tuple[str, ...] = ("RT", "DA")) -> d
         "markets": sorted(combined["market"].unique().tolist()),
         "parquet": str(paths.ZONE_PRICES_PARQUET),
     }
+    if paths.ZONE_PRICES_HOURLY_PARQUET.exists():
+        try:
+            summary["hourly_rows"] = len(pd.read_parquet(
+                paths.ZONE_PRICES_HOURLY_PARQUET, columns=["zone"]))
+            summary["hourly_parquet"] = str(paths.ZONE_PRICES_HOURLY_PARQUET)
+        except Exception:
+            pass
     write_state({"last_success": tz.now_eastern().isoformat(), **summary})
-    log(f"\nDone. {summary['rows']:,} zone-month rows saved.")
+    log(f"\nDone. {summary['rows']:,} zone-month rows saved"
+        + (f", {summary['hourly_rows']:,} hourly rows." if "hourly_rows" in summary else "."))
     return summary
 
 
