@@ -233,8 +233,165 @@ def update(log=print) -> pd.DataFrame | None:
     return df
 
 
+# ── Historical backfill from per-contract Yahoo history ─────────────────────
+# Yahoo's snapshot endpoint (used by _gas_from_yahoo) only serves the strip as
+# it stands right now. But each individual NYMEX NG contract ticker carries its
+# own daily settle history, so downloading each contract separately and pivoting
+# on trade date reconstructs a strip snapshot for every past trading day. That
+# is what forward_vol() actually wants — it needs ~30 daily observations per
+# delivery month before the estimator is stable, and one daily pull takes a
+# month to accumulate that. A backfill lands the same data in a single run.
+
+BACKFILL_HORIZON_MONTHS = 30    # how far past each snapshot date to include
+BACKFILL_MAX_JUMP_FRAC = 0.5    # drop a single print > this vs. the prior kept
+
+
+_NYMEX_MONTH_CODE = {1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M",
+                     7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z"}
+
+
+def _contract_ticker(m: pd.Timestamp) -> str:
+    """NYMEX Henry Hub future ticker for delivery month m (e.g. Jan-2027 → NGF27.NYM)."""
+    return f"NG{_NYMEX_MONTH_CODE[m.month]}{str(m.year)[2:]}.NYM"
+
+
+def _reject_bad_ticks(series: pd.Series, max_jump: float) -> pd.Series:
+    """Drop any print more than max_jump away (fractional) from the last kept
+    value in the same series. Yahoo's deferred contracts throw the occasional
+    outlier that would otherwise pump forward_vol()'s std estimate.
+    """
+    s = series.dropna().sort_index()
+    if s.empty:
+        return s
+    keep = [True]
+    last = float(s.iloc[0])
+    for v in s.iloc[1:]:
+        v = float(v)
+        if last > 0 and abs(v / last - 1.0) > max_jump:
+            keep.append(False)
+        else:
+            keep.append(True)
+            last = v
+    return s[keep]
+
+
+def backfill_from_yahoo(
+    days_back: int = 365,
+    horizon_months: int = BACKFILL_HORIZON_MONTHS,
+    min_contracts: int = MIN_MONTHS,
+    max_jump_frac: float = BACKFILL_MAX_JUMP_FRAC,
+    log=print,
+) -> int:
+    """Reconstruct daily strip vintages from per-contract Yahoo history and
+    merge them into GAS_STRIP_HISTORY_PARQUET.
+
+    Existing vintages (including today's live pull) are preserved — dedup on
+    (asof, month) keeps the newer row on a same-day collision so the daily
+    pipeline stays authoritative for its own dates.
+
+    Returns the number of newly-added vintage days.
+    """
+    try:
+        import logging
+        import yfinance as yf
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+    except Exception as e:
+        log(f"Gas backfill: yfinance unavailable ({e}).")
+        return 0
+
+    today = pd.Timestamp.now().normalize()
+    window_start = today - pd.Timedelta(float(days_back), unit="D")
+    # Every delivery month that could have been in-strip at any point in the
+    # window: from the window-start front-month through today's deferred tail.
+    first_delivery = window_start.to_period("M").to_timestamp()
+    last_delivery = (today + pd.offsets.MonthBegin(horizon_months)).to_period("M").to_timestamp()
+    months = pd.date_range(first_delivery, last_delivery, freq="MS")
+    log(f"Gas backfill: pulling {len(months)} contracts "
+        f"({months[0]:%b-%Y} → {months[-1]:%b-%Y}), {days_back}d window.")
+
+    # per_contract[month] -> Series indexed by trade date, cleaned of bad ticks.
+    per_contract: dict[pd.Timestamp, pd.Series] = {}
+    for i, m in enumerate(months, 1):
+        tk = _contract_ticker(m)
+        try:
+            h = yf.download(tk, period=f"{days_back + 60}d", progress=False,
+                            threads=False, timeout=15, auto_adjust=False)
+        except Exception as e:
+            log(f"  [{i:2d}/{len(months)}] {tk}: fetch failed ({e})")
+            continue
+        if h is None or len(h) == 0 or "Close" not in getattr(h, "columns", []):
+            log(f"  [{i:2d}/{len(months)}] {tk}: no data")
+            continue
+        close = h["Close"]
+        if hasattr(close, "columns"):        # MultiIndex when tickers is a list
+            close = close.iloc[:, 0]
+        cleaned = _reject_bad_ticks(close, max_jump_frac)
+        cleaned = cleaned[(cleaned.index >= window_start) & (cleaned.index <= today)]
+        if len(cleaned):
+            per_contract[m] = cleaned
+            log(f"  [{i:2d}/{len(months)}] {tk}: {len(cleaned):>3} settles "
+                f"({cleaned.index.min().date()} → {cleaned.index.max().date()})")
+
+    if not per_contract:
+        log("Gas backfill: no data pulled.")
+        return 0
+
+    # Pivot: for each trade date, the strip = every contract that printed then
+    # and whose delivery month is still in the future on that date.
+    wide = pd.DataFrame(per_contract).sort_index()
+    wide.index = pd.to_datetime(wide.index).normalize()
+    rows = []
+    for trade_date, row in wide.iterrows():
+        strip = row.dropna()
+        # Drop contracts already delivered (a contract's own history keeps
+        # printing past first-notice day, but that price is not a "forward").
+        strip = strip[[m for m in strip.index if m >= trade_date.to_period("M").to_timestamp()]]
+        if len(strip) < min_contracts:
+            continue
+        rows.append(pd.DataFrame({
+            "asof": trade_date,
+            "month": strip.index,
+            "gas_price": strip.values,
+        }))
+    if not rows:
+        log("Gas backfill: no vintages met the min-contracts threshold.")
+        return 0
+    new_snap = pd.concat(rows, ignore_index=True)
+
+    existing = history()
+    if existing is None or existing.empty:
+        combined = new_snap
+    else:
+        existing = existing.assign(asof=pd.to_datetime(existing["asof"]),
+                                   month=pd.to_datetime(existing["month"]))
+        # Existing rows win on same-day collision — the live daily pull is the
+        # canonical source for its own dates; reconstructed data is fallback.
+        combined = pd.concat([new_snap, existing], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["asof", "month"], keep="last")
+
+    combined = combined.sort_values(["asof", "month"]).reset_index(drop=True)
+    paths.GAS_DIR.mkdir(parents=True, exist_ok=True)
+    combined.to_parquet(paths.GAS_STRIP_HISTORY_PARQUET, index=False)
+
+    added = combined["asof"].nunique() - (existing["asof"].nunique()
+                                          if existing is not None and not existing.empty else 0)
+    log(f"Gas backfill: {len(new_snap):,} rows across "
+        f"{new_snap['asof'].nunique()} vintages fetched; "
+        f"archive now holds {combined['asof'].nunique()} distinct vintages "
+        f"({added:+d}).")
+    return int(added)
+
+
 if __name__ == "__main__":
     import sys
+
+    if "backfill" in sys.argv[1:]:
+        days = 365
+        for a in sys.argv[1:]:
+            if a.startswith("--days="):
+                days = int(a.split("=", 1)[1])
+        backfill_from_yahoo(days_back=days)
+        sys.exit(0)
 
     force = "--force" in sys.argv[1:]
     if not force and refreshed_today():

@@ -164,3 +164,45 @@ def test_forward_vol_respects_asof(tmp_history):
     _fill_history(200, seed=3)
     assert gas_strip.forward_vol("2026-01-15") is None      # too few by then
     assert gas_strip.forward_vol() is not None
+
+
+# ── Historical backfill ──────────────────────────────────────────────────────
+# The Yahoo call itself is not testable offline; these pin the pieces around it
+# — the tick filter that keeps outliers out of the archive, and the ticker
+# encoding that dictates which contract each pull maps to.
+
+def test_ticker_encoding_matches_the_nymex_month_codes():
+    # NYMEX month code table (F G H J K M N Q U V X Z) mapped to years 26–28.
+    assert gas_strip._contract_ticker(pd.Timestamp("2027-01-01")) == "NGF27.NYM"
+    assert gas_strip._contract_ticker(pd.Timestamp("2027-07-01")) == "NGN27.NYM"
+    assert gas_strip._contract_ticker(pd.Timestamp("2028-08-01")) == "NGQ28.NYM"
+    assert gas_strip._contract_ticker(pd.Timestamp("2026-12-01")) == "NGZ26.NYM"
+
+
+def test_bad_tick_filter_drops_only_the_outlier():
+    """A single bad print between two good ones must not throw away the good
+    ones. The current threshold is 50% day-over-day."""
+    idx = pd.date_range("2026-01-01", periods=6, freq="D")
+    s = pd.Series([3.00, 3.05, 9.99, 3.10, 3.08, 3.02], index=idx)
+    got = gas_strip._reject_bad_ticks(s, max_jump=0.5)
+    assert 9.99 not in got.values
+    assert len(got) == 5
+    assert got.iloc[0] == pytest.approx(3.00)
+    assert got.iloc[-1] == pytest.approx(3.02)
+
+
+def test_bad_tick_filter_allows_a_genuine_regime_move():
+    """A real 30% jump like Dec-25 → Jan-26 must survive."""
+    idx = pd.date_range("2026-01-01", periods=3, freq="D")
+    s = pd.Series([3.00, 3.90, 4.05], index=idx)   # 30%, 4%
+    got = gas_strip._reject_bad_ticks(s, max_jump=0.5)
+    assert len(got) == 3
+
+
+def test_bad_tick_filter_uses_the_last_kept_value_not_the_last_seen():
+    """After dropping an outlier, comparisons continue against the last *kept*
+    price — otherwise a single spike would drag its neighbour out too."""
+    idx = pd.date_range("2026-01-01", periods=4, freq="D")
+    s = pd.Series([3.00, 9.99, 3.05, 3.10], index=idx)
+    got = gas_strip._reject_bad_ticks(s, max_jump=0.5)
+    assert list(got.values) == pytest.approx([3.00, 3.05, 3.10])
