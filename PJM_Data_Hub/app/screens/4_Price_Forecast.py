@@ -199,13 +199,8 @@ if "vol_source" in df.columns:
 
 st.subheader("Forecast table")
 st.caption(
-    "One row per forward month. P10–P90 are percentile power prices ($/MWh) "
-    "from the simulation. **Gas σ** is the log-volatility applied to gas that "
-    "month — it rises with horizon and with winter delivery risk. **History "
-    "pts** is how many past heat-rate observations shaped that month, and "
-    "**Eff. pts** how many remain after older years are downweighted; when "
-    "History pts is below 2 the month falls back to a default heat rate, so "
-    "treat those prices as rough until more history accumulates.")
+    "One row per forward month. Hover any column header for what it means and "
+    "how it enters the forecast.")
 low_history = int((df["n_samples"] < 2).sum())
 if low_history:
     st.warning(
@@ -225,12 +220,51 @@ if "hr_median" in disp:
 if "n_eff" in disp:
     disp["n_eff"] = disp["n_eff"].map(lambda x: f"{x:,.1f}")
 disp["n_samples"] = disp["n_samples"].map(lambda x: f"{x:,.0f}")
-disp = disp.rename(columns={
+
+# Per-column help text lands on the header as a hover tooltip. Preferred to a
+# dense caption block above the table — the explanation shows up right where
+# you're looking at the number.
+_column_help = {
+    "month": "Delivery month for this forward-strip row.",
+    "gas_fwd": "Henry Hub natural-gas forward for this delivery month "
+               "($/MMBtu). Sourced from the NYMEX strip vintage shown at the "
+               "top of the page; the P50 power price anchors on this × the "
+               "historical implied heat rate.",
+    "gas_sigma": "Log-volatility applied to the gas draw for this month. "
+                 "Rises with horizon and with winter delivery risk — a "
+                 "January contract carries roughly twice the delivery-month "
+                 "risk of a July one. Measured off the vintage archive where "
+                 "enough data exists, otherwise modelled from EIA spot.",
+    "hr_median": "Recency-weighted median implied heat rate (MMBtu/MWh) for "
+                 "this calendar month, from past LMP ÷ HH gas. 3-year "
+                 "half-life on the observation year, so the current fleet "
+                 "dominates the anchor.",
+    "p10": "10th percentile power price from the Monte Carlo ($/MWh).",
+    "p25": "25th percentile power price from the Monte Carlo ($/MWh).",
+    "p50": "Median power price from the Monte Carlo ($/MWh). Equals "
+           "gas_fwd × heat rate at the anchor, adjusted for lognormal drift.",
+    "p75": "75th percentile power price from the Monte Carlo ($/MWh).",
+    "p90": "90th percentile power price from the Monte Carlo ($/MWh).",
+    "n_samples": "Raw count of past observations of this calendar month's "
+                 "implied heat rate in the data lake. Below 2 the month "
+                 "falls back to a default heat rate — treat as rough until "
+                 "more history accumulates.",
+    "n_eff": "Effective sample size after the 3-year recency weighting. "
+             "Tells you how much of the raw history is actually driving "
+             "the anchor once older years are downweighted.",
+}
+_labels = {
     "month": "Month", "gas_fwd": "Gas fwd $/MMBtu", "gas_sigma": "Gas σ",
     "hr_median": "Heat rate", "p10": "P10", "p25": "P25",
     "p50": "P50 (median)", "p75": "P75", "p90": "P90",
-    "n_samples": "History pts", "n_eff": "Eff. pts"})
-st.dataframe(disp, width="stretch", hide_index=True)
+    "n_samples": "History pts", "n_eff": "Eff. pts",
+}
+disp = disp.rename(columns=_labels)
+_column_config = {
+    _labels[k]: st.column_config.Column(label=_labels[k], help=v)
+    for k, v in _column_help.items() if _labels[k] in disp.columns
+}
+st.dataframe(disp, width="stretch", hide_index=True, column_config=_column_config)
 
 st.caption(
     "**Methodology:** P50 power price = gas forward × recency-weighted median implied heat rate "
