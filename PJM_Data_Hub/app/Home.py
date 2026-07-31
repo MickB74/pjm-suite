@@ -64,6 +64,7 @@ nav = st.navigation({
     ],
     "Analyze": [
         st.Page(f"{P}/4_Price_Forecast.py", title="Price Forecast", icon="📉"),
+        st.Page(f"{P}/25_Forecast_Accuracy.py", title="Forecast Accuracy", icon="🎯"),
         st.Page(f"{P}/6_DART_Spread.py", title="DA–RT Spread", icon="⚖️"),
         st.Page(f"{P}/8_Hub_Basis.py", title="Hub Basis", icon="🧭"),
         st.Page(f"{P}/7_Capture_Price.py", title="Capture Price", icon="🎯"),
