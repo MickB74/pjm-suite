@@ -2,7 +2,7 @@
 
 ## What this is
 
-PJM energy-market analytics suite: a parquet data lake, a `pjm_core` engine library, a CLI orchestrator, and a Streamlit app with 20+ screens. Covers all 12 PJM trading hubs (primary: Dominion Hub). Sibling of `../ercot-suite` — same design, no shared code.
+PJM energy-market analytics suite: a parquet data lake, a `pjm_core` engine library, a CLI orchestrator, and a Streamlit app with ~25 screens. Covers all 12 PJM trading hubs (primary: Dominion Hub). Sibling of `../ercot-suite` — same design, no shared code.
 
 ## Quick reference
 
@@ -24,14 +24,16 @@ PJM energy-market analytics suite: a parquet data lake, a `pjm_core` engine libr
 
 ```
 PJM_Data_Hub/
-  pjm_core/          # Engine: prices, settlement, invoice, peak/5CP, capacity,
-                     #   futures (ICE fwd curve), forecast, plant earnings,
-                     #   timezone, paths, credentials
+  pjm_core/          # Engine. Pricing: prices, price_forecast, forecast_backtest,
+                     #   gas_strip, futures (ICE fwd curve), capacity, invoice,
+                     #   settlement, settlement_points, delivery, plant_earnings,
+                     #   plant_zones. Ops: peak (5CP), prediction_log,
+                     #   data_status, weather_points, tz, paths, credentials.
   datasets/          # ETL modules: hub_prices, zone_prices, system_gen_by_fuel,
-                     #   load, ancillary, weather, eia923, eia860
+                     #   load, ancillary, weather, eia923, eia860, queue.
   app/Home.py        # Streamlit entry point; defines the sidebar nav (st.navigation)
   app/_common.py     # Shared helpers (auto-refresh, LMP component definitions)
-  app/screens/       # Numbered screen modules (0–21)
+  app/screens/       # Numbered screen modules (0–25 currently, not contiguous)
   scripts/           # peak_digest.py (morning 5CP briefing)
   orchestrate.py     # CLI: update <dataset> | status
   config.json        # Secrets (git-ignored); copy from config.example.json
@@ -54,12 +56,13 @@ PJM_Data_Hub/
 - **Paths**: All data paths go through `pjm_core.paths` — never hardcode `data/` paths.
 - **Screens**: Numbered `NN_Name.py` in `app/screens/`. Sidebar order and grouping are **not** the filename prefix — they're defined explicitly by the `st.navigation({...})` dict in `app/Home.py`, keyed by section ("Start Here", "Explore", "Capacity & Peaks", "Analyze"). Each page's URL slug also comes from its `st.Page(..., title=...)` there.
 - **Data lake**: Parquet files under `PJM_Data_Hub/data/` with `.last_update.json` freshness markers.
-- **Gas strip vintages**: every `gas_strip.update()` pull is also archived to `data/gas/henry_hub_strip_history.parquet` (one snapshot per day, keyed by `asof`). `gas_strip.strip_asof(date)` returns the strip as it stood on a date; `price_forecast.run(asof=d, gas_asof=d)` re-runs the forecast from that vintage (Price Forecast screen → "Gas strip vintage" picker). A missing vintage raises — never silently substitute today's strip in a backtest.
+- **Gas strip vintages**: every `gas_strip.update()` pull is also archived to `data/gas/henry_hub_strip_history.parquet` (one snapshot per day, keyed by `asof`). `gas_strip.strip_asof(date)` returns the strip as it stood on a date; `price_forecast.run(asof=d, gas_asof=d)` re-runs the forecast from that vintage (Price Forecast screen → "Gas strip vintage" picker). A missing vintage raises — never silently substitute today's strip in a backtest. `python -m pjm_core.gas_strip backfill --days=365` reconstructs vintages from Yahoo per-contract history; note Yahoo delists expired contracts, so reconstructed vintages older than a few days are missing their near months (front year comes from `_extend_to_horizon`'s mean-reversion fallback).
 - **Gas anchor**: the forecast anchors on `gas_strip.strip_median()` — the per-contract median of the last 5 vintages, not a single day's settle — which rejects bad ticks from the unofficial Yahoo feed. Keep the window short: a forward is near-martingale, so averaging over weeks lags real moves rather than smoothing noise. `anchor_vintages=1` gives the raw settle.
 - **Gas volatility**: seasonal in the *delivery* month (a January contract carries ~2x a July one) and mean-reverting in horizon (`_gas_terminal_sigma`, OU with κ = 0.29/yr), not a flat σ·√t. Seasonality scales only the final `DELIVERY_WINDOW_YEARS` of variance — multiplying the whole accumulated path puts σ ≈ 1.2 on a far-out January, which implies a P50 at half the forward. Constants are fitted to EIA Henry Hub spot; `gas_strip.forward_vol()` supersedes them per-contract once ~30 vintages exist.
 - **Gas → power pass-through**: modelled as a structural elasticity (`GAS_PASS_THROUGH_BETA = 0.90`, measured on DOM Hub), *not* a correlation between the gas and heat-rate shocks — a fixed correlation lets the implied β drift with the ratio of the two σ's. A plain product of independent lognormals implies β = 1.0 and overstates the band.
 - **Cross-month correlation**: gas is drawn as one OU-correlated path across the horizon, so `run()` also returns `strip_p10/p50/p90` — the distribution of the *horizon-average* price. Use those for annual/PPA-level numbers; don't derive them from the monthly bands. Averaging the monthly P10/P90s assumes lockstep months and runs too wide; independent monthly draws diversify the regime risk away and run far too narrow (on the current 18-month strip: 50 / 38 / 15 $/MWh of spread respectively).
 - **Heat rate**: recency-weighted per calendar month (3-year half-life, `HR_RECENCY_HALFLIFE_YEARS`). The DOM Hub fleet has shifted enough (coal retirement, solar, data-centre load) that pooling 2020 with 2025 anchors the P50 too low.
+- **Forecast accuracy**: `pjm_core.forecast_backtest` walk-forwards the model across every archived vintage — monkey-patches `_load_dom_hub_monthly`/`_gas_from_eia` per as-of to prevent lookahead, then compares each forecast month's P50/P10/P90 to the realised LMP. `gas_from_strip` marks per row whether the forecast month's own gas contract was in the vintage (True) or filled by mean-reversion (False). Today that flag is False on every row (Yahoo delists expired contracts, so reconstructed vintages start beyond the realised window); it will start populating a few months out as live daily pulls line up with realised months. Persists to `data/price_forecast/backtest_results.parquet`; refreshed by the Forecast Accuracy screen (Analyze section) or `python -m pjm_core.forecast_backtest --horizon=12`.
 - **Primary hub**: `DOMINION HUB` — defined in `pjm_core.settlement_points.PRIMARY_HUB`.
 - **Zone names differ by feed**: the metered-load feed uses short codes (`PEP`, `CE`, `BC`, `PL`…), the LMP feed uses long names (`PEPCO`, `COMED`, `BGE`, `PPL`…). Cross them with `settlement_points.LOAD_ZONE_PRICE_ZONE` (20 of 22 load zones). `RTO` and `OVEC` are deliberately absent — no zonal LMP exists for either.
 - **Never default a zone to a hub price**: only 6 of 22 load zones have a namesake trading hub, so `ZONE_HOME_HUB.get(zone, PRIMARY_HUB)` silently paired e.g. PEPCO load with a Virginia price. For a zone's price at a specific hour use `pjm_zone_prices.load_hourly(market="RT", zones=[...])`; fall back to a hub only where no zonal LMP exists, and label it as a reference.
@@ -81,3 +84,4 @@ There is a `.claude/launch.json` in `PJM_Data_Hub/` for the Browser preview pane
 - **External market data with no free API**: some sources are Akamai-gated (CME, ICE product pages). The pattern is a user-maintainable CSV seed plus a best-effort scraper that never raises and falls back to the CSV — see `pjm_core/futures.py` (ICE free ~15-min-delayed forward curve via `curl_cffi`) and `pjm_core/capacity.py` (RPM reference table).
 - **Add a new dataset**: Create a module under `datasets/`, add its update function to `orchestrate.py`, register data paths in `pjm_core/paths.py`.
 - **Modify engine logic**: Edit the relevant module in `pjm_core/`. Multiple screens may depend on it — check callers.
+- **Check forecast quality**: `python -m pjm_core.forecast_backtest --horizon=12` (prints headline stats + caches to parquet) or open the Forecast Accuracy screen. The `real_strip_only=True` split only populates once live daily pulls line up with realised months — before then, the reported bias/MAE bundles model error with strip-extrapolation error and the screen banner says so.
