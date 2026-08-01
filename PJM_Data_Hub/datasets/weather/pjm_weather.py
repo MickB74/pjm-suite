@@ -72,7 +72,16 @@ def _make_logger(callback=None):
 # ---------------------------------------------------------------------------
 
 def _fetch_city(city: str, zone: str, lat: float, lon: float,
-                start: date, end: date, log=print, url: str = _ARCHIVE_URL) -> pd.DataFrame:
+                start: date, end: date, log=print, url: str = _ARCHIVE_URL,
+                max_retries: int = 5,
+                deadline: float | None = None) -> pd.DataFrame:
+    """One city's hourly weather from Open-Meteo.
+
+    ``max_retries`` caps 429 backoff attempts (batch loads use 5, the interactive
+    forecast path uses 1). ``deadline`` is an absolute ``time.monotonic()`` cutoff;
+    the retry loop skips its sleep and bails once the cutoff is passed, so a
+    single stubborn city cannot outlast the caller's wall-clock budget.
+    """
     params = {
         "latitude": lat, "longitude": lon,
         "start_date": start.isoformat(), "end_date": end.isoformat(),
@@ -80,17 +89,25 @@ def _fetch_city(city: str, zone: str, lat: float, lon: float,
         "temperature_unit": "fahrenheit",
         "timezone": "America/New_York",
     }
-    for attempt in range(5):
-        resp = requests.get(url, params=params, timeout=90)
+    for attempt in range(max_retries):
+        if deadline is not None and time.monotonic() >= deadline:
+            log("      deadline reached, skipping city")
+            return pd.DataFrame()
+        resp = requests.get(url, params=params, timeout=15)
         if resp.status_code == 429:
             wait = 10.0 * (2 ** attempt)
+            if deadline is not None:
+                wait = min(wait, max(0.0, deadline - time.monotonic()))
+                if wait <= 0:
+                    log("      rate-limited and out of time, skipping city")
+                    return pd.DataFrame()
             log(f"      rate-limited, waiting {wait:.0f}s …")
             time.sleep(wait)
             continue
         resp.raise_for_status()
         break
     else:
-        log("      rate-limited after 5 retries, skipping city")
+        log(f"      rate-limited after {max_retries} retries, skipping city")
         return pd.DataFrame()
 
     hourly = resp.json().get("hourly", {})
@@ -108,13 +125,20 @@ def _fetch_city(city: str, zone: str, lat: float, lon: float,
     return df[keep].dropna(subset=["datetime_beginning_ept"])
 
 
-def fetch(start: date, end: date, log=print, source: str = "era5") -> pd.DataFrame:
+def fetch(start: date, end: date, log=print, source: str = "era5",
+          max_retries: int = 5, timeout_seconds: float | None = None) -> pd.DataFrame:
     """Fetch hourly weather for all load centers over [start, end] inclusive.
 
     ``source="era5"`` uses the ERA5 reanalysis archive (authoritative, ~5-day
     lag). ``source="recent"`` uses the near-real-time forecast endpoint, which
     reports the last several days of hourly actuals — used to fill the ERA5 lag
     gap so the newest peaks show weather before the reanalysis settles.
+
+    ``timeout_seconds`` caps the total wall-clock spent across all cities. When
+    exceeded, returns whatever cities completed successfully — better a partial
+    forecast than none. Batch loads (auto-refresh, backfills) leave this ``None``;
+    interactive callers should pass a short budget (e.g. 30s) so a rate-limited
+    Open-Meteo cannot hang a screen render.
     """
     if source == "era5":
         url = _ARCHIVE_URL
@@ -123,13 +147,18 @@ def fetch(start: date, end: date, log=print, source: str = "era5") -> pd.DataFra
     else:
         raise ValueError(f"Unknown weather source {source!r} "
                          "(only 'era5' and 'recent' supported).")
+    deadline = (time.monotonic() + timeout_seconds) if timeout_seconds else None
     pts = weather_points.points()
     frames = []
     for _, row in pts.iterrows():
+        if deadline is not None and time.monotonic() >= deadline:
+            log(f"    ⏱ deadline reached — returning {len(frames)}/{len(pts)} cities")
+            break
         log(f"    {row['city']} ({row['zone']}) {start} → {end} …")
         try:
             df = _fetch_city(row["city"], row["zone"], row["lat"], row["lon"],
-                             start, end, log=log, url=url)
+                             start, end, log=log, url=url,
+                             max_retries=max_retries, deadline=deadline)
             if not df.empty:
                 frames.append(df)
                 log(f"      {len(df):,} rows")
@@ -137,7 +166,9 @@ def fetch(start: date, end: date, log=print, source: str = "era5") -> pd.DataFra
                 log("      0 rows")
         except Exception as e:
             log(f"      failed: {e}")
-        time.sleep(1.0)
+        # Small courtesy pause between cities, but never past the deadline.
+        if deadline is None or time.monotonic() + 1.0 < deadline:
+            time.sleep(1.0)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
@@ -352,7 +383,11 @@ def weighted_temp(start=None, end_excl=None, zone: str | None = None) -> pd.Data
     return _pop_weighted(load(start=start, end_excl=end_excl), zone=zone)
 
 
-def forecast_weighted(days: int = 16, zone: str | None = None) -> pd.DataFrame:
+FORECAST_WALL_CLOCK_SECONDS = 30.0    # never hang a screen render longer than this
+
+
+def forecast_weighted(days: int = 16, zone: str | None = None,
+                      timeout_seconds: float = FORECAST_WALL_CLOCK_SECONDS) -> pd.DataFrame:
     """Population-weighted **forecast** temperature for the next ``days`` days.
 
     Pulls the Open-Meteo forecast endpoint (near-real-time model, up to +16
@@ -360,13 +395,21 @@ def forecast_weighted(days: int = 16, zone: str | None = None) -> pd.DataFrame:
     matching :func:`weighted_temp`'s columns. This is live forecast data — it is
     *not* written to the ERA5 store; the 5CP peak predictor consumes it in
     memory. Returns empty on any fetch failure so callers can degrade cleanly.
+
+    Hard wall-clock cap: whatever cities complete inside ``timeout_seconds``
+    make it into the result; the rest are dropped. Prevents a rate-limited
+    Open-Meteo (worst-case 5×backoff × 14 cities ≈ 72 minutes) from hanging
+    the Peak Predictor page open indefinitely. Retries capped at 1 per city
+    for the same reason — interactive callers can't afford full exponential
+    backoff. Batch loads keep the default 5-retry behaviour via :func:`fetch`.
     """
     from pjm_core import tz
     days = max(1, min(int(days), 16))     # Open-Meteo forecast horizon caps at 16
     today = tz.now_eastern().date()
     try:
         df = fetch(today, today + timedelta(days=days - 1),
-                   log=lambda *_: None, source="recent")
+                   log=lambda *_: None, source="recent",
+                   max_retries=1, timeout_seconds=timeout_seconds)
     except Exception:
         return pd.DataFrame(columns=["datetime_beginning_ept"] + VALUE_COLS)
     return _pop_weighted(df, zone=zone)

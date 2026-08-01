@@ -67,6 +67,20 @@ if model is None:
                "Run **Update Weather (ERA5)** on the API Keys page.")
     st.stop()
 
+# Distinguish "no forecast came back" from "no in-season days in the horizon".
+# The former is a live-network failure (Open-Meteo rate-limit or the 30s cap
+# firing); the latter is expected in winter. Handling them the same way used
+# to leave the page silent when Open-Meteo was throttling.
+if pred.empty:
+    st.info(
+        "🌤️ Forecast weather is temporarily unavailable — Open-Meteo may be "
+        "rate-limiting this address. Try again in a minute, or check back "
+        "when the 5CP window is open (June 1 – Sept 30)."
+        if pd.Timestamp.now().month in range(6, 10) else
+        "No summer days in the forecast horizon — the 5CP window is "
+        "June 1 – Sept 30. Check back in season.")
+    st.stop()
+
 year = pd.Timestamp.now().year
 threshold = peak.current_threshold(load, year) or 0.0
 
@@ -85,10 +99,7 @@ if not pred.empty:
                 help="Chance that day's peak beats the current threshold, from "
                      "the model's historical residual spread.")
 
-if pred.empty:
-    st.info("No summer days in the forecast horizon — the 5CP window is "
-            "June 1 – Sept 30. Check back in season.")
-    st.stop()
+# (pred.empty already handled above with a network-aware fallback message.)
 
 # Silently log today's forecast so it can be scored later. Idempotent per day
 # (page refreshes don't double-log). Never fail the render if logging errors.
