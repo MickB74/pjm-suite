@@ -83,20 +83,48 @@ if sub.empty:
 # energy_source=fuel_type) — both feeds use the standard EIA fuel codes, and a
 # per-fuel join is more accurate than plant-total when a plant runs several
 # units on different fuels.
+#
+# `cap_filtered` is the authoritative "capacity in the ground" for the current
+# user filters — used for the KPI card and the fleet CF denominator. It is
+# independent of whether a plant reported to 923 in year_sel, so switching from
+# 2024 → 2026 does not make MW appear to shrink when 923 simply hasn't caught
+# up to summer peakers yet. The per-plant table still uses the 923-joined
+# `annual` (rows without 923 gen would just be blank rows, which isn't useful).
 _available_860 = load_eia860.available_years()
 _cap_year = year_sel if year_sel in _available_860 else (max(_available_860) if _available_860 else None)
 cap = load_eia860.load(_cap_year) if _cap_year else pd.DataFrame()
 if not cap.empty:
     cap = (cap.rename(columns={"energy_source": "fuel_type"})
-           [["plant_id", "fuel_type", "nameplate_mw", "summer_mw", "winter_mw"]]
-           .groupby(["plant_id", "fuel_type"], as_index=False).sum())
+           [["plant_id", "plant_name", "state", "fuel_type",
+             "nameplate_mw", "summer_mw", "winter_mw"]]
+           .groupby(["plant_id", "plant_name", "state", "fuel_type"],
+                    as_index=False).sum())
+    cap["source"] = cap["fuel_type"].map(fuel_group)
+    # Apply the same source / fuel / state / search filters that shape `sub`,
+    # so the KPI shows the capacity that matches what the user asked to see.
+    cap_filtered = cap.copy()
+    if source_sel != "All":
+        cap_filtered = cap_filtered[cap_filtered["source"] == source_sel]
+    if fuel_sel != "All":
+        cap_filtered = cap_filtered[cap_filtered["fuel_type"] == fuel_sel]
+    if state_sel != "All":
+        cap_filtered = cap_filtered[cap_filtered["state"] == state_sel]
+    if search:
+        cap_filtered = cap_filtered[cap_filtered["plant_name"]
+                                    .str.contains(search, case=False, na=False)]
+else:
+    cap_filtered = pd.DataFrame(columns=["nameplate_mw", "summer_mw"])
 
 # The store is one row per plant × fuel × month; aggregate to annual for ranking.
 # (Pre-monthly parquets have month=<NA> and are already annual rows.)
 annual = (sub.groupby(["plant_id", "plant_name", "state", "source", "fuel_type"],
                       as_index=False)["net_generation_mwh"].sum())
 if not cap.empty:
-    annual = annual.merge(cap, on=["plant_id", "fuel_type"], how="left")
+    # Merge only the MW cols — plant_name/state/source already live on annual
+    # and would collide with the copies now in `cap`.
+    annual = annual.merge(cap[["plant_id", "fuel_type",
+                               "nameplate_mw", "summer_mw", "winter_mw"]],
+                          on=["plant_id", "fuel_type"], how="left")
     # Capacity factor = actual MWh / (nameplate MW × hours-in-period). Hours
     # scale with how much of the year the store actually covers — the current
     # calendar year is typically only a few months in, and using 8760 there
@@ -116,17 +144,19 @@ else:
     _n_months, _hrs = 0, 0
 
 total_mwh = sub["net_generation_mwh"].sum()
-total_mw = float(annual["nameplate_mw"].sum(skipna=True)) if "nameplate_mw" in annual else 0.0
-_matched = int(annual["nameplate_mw"].notna().sum()) if "nameplate_mw" in annual else 0
+# Fleet capacity comes from 860 for the filter selection — NOT from the 923
+# join. A plant that hasn't reported in year_sel yet still has capacity in the
+# ground, and its MW should count. Otherwise the metric shrinks when the year
+# is early and grows through the year as more plants report — misleading.
+total_mw = float(cap_filtered["nameplate_mw"].sum()) if len(cap_filtered) else 0.0
 
 _c1, _c2, _c3 = st.columns(3)
 _c1.metric("Total net generation (MWh)", f"{total_mwh:,.0f}")
 _c2.metric("Nameplate capacity (MW)", f"{total_mw:,.0f}" if total_mw else "—",
-           help=(f"Sum of nameplate MW across matched plants "
-                 f"({_matched} of {len(annual)} rows). "
+           help=(f"Total installed nameplate across the filter selection. "
                  f"Source: EIA-860 {_cap_year}."
-                 + (" Capacity is stated as of a different year than "
-                    "generation — 860 lags 923 by ~1 year."
+                 + (f" 860 lags 923 by ~1 year — capacity is stated as of "
+                    f"{_cap_year} rather than {year_sel}."
                     if _cap_year and _cap_year != year_sel else ""))
            if total_mw else None)
 if total_mw and _hrs:
