@@ -152,11 +152,19 @@ total_mw = float(cap_filtered["nameplate_mw"].sum()) if len(cap_filtered) else 0
 
 _c1, _c2, _c3 = st.columns(3)
 _c1.metric("Total net generation (MWh)", f"{total_mwh:,.0f}")
-_c2.metric("Nameplate capacity (MW)", f"{total_mw:,.0f}" if total_mw else "—",
+# When 860 lags year_sel, put the vintage in the METRIC LABEL rather than just
+# the tooltip — same MW showing across 2025 / 2026 (because both fall back to
+# 860's latest) is confusing without an inline "as of YYYY" cue.
+_mw_label = "Nameplate capacity (MW)"
+if _cap_year and _cap_year != year_sel:
+    _mw_label += f" · as of {_cap_year}"
+_c2.metric(_mw_label, f"{total_mw:,.0f}" if total_mw else "—",
            help=(f"Total installed nameplate across the filter selection. "
                  f"Source: EIA-860 {_cap_year}."
-                 + (f" 860 lags 923 by ~1 year — capacity is stated as of "
-                    f"{_cap_year} rather than {year_sel}."
+                 + (f" EIA has not yet released 860 for {year_sel} — annual "
+                    f"860 lands ~6 months after year-end. Using {_cap_year} "
+                    "as the best available proxy; new plants online since "
+                    f"{_cap_year} and retirements after it are not reflected."
                     if _cap_year and _cap_year != year_sel else ""))
            if total_mw else None)
 if total_mw and _hrs:
