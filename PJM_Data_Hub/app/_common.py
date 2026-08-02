@@ -36,6 +36,9 @@ _AUTO_REFRESH_TASKS = [
     ("System load", "datasets.load.pjm_load", "update", True),
     ("Weather (ERA5)", "datasets.weather.pjm_weather", "update", False),
     ("Interconnection queue", "datasets.queue.pjm_queue", "update", False),
+    # 860M self-throttles to once a week — see eia860m.REFRESH_INTERVAL_DAYS.
+    # Safe to include here; the update call returns early on cooldown.
+    ("EIA-860M (monthly capacity)", "datasets.eia860m.eia860m", "update", False),
 ]
 
 

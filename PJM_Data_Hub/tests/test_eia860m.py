@@ -174,6 +174,64 @@ def test_load_missing_snapshot_returns_empty(tmp_store):
     assert eia860m.load(2020, 1).empty
 
 
+# ── Weekly self-throttle ─────────────────────────────────────────────────────
+
+def test_update_skips_when_last_success_within_a_week(tmp_store, monkeypatch):
+    """`update()` is on the auto-refresh queue that fires on every app open.
+    EIA publishes each 860M snapshot once, so hitting them more than weekly is
+    pure waste."""
+    import json
+    # Simulate a run 2 days ago.
+    (tmp_store / ".state.json").write_text(json.dumps({
+        "last_success": (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2)).isoformat(),
+        "latest": "2026-06", "count": 1, "snapshots": ["2026-06"],
+    }))
+    calls = []
+    monkeypatch.setattr(eia860m, "fetch_month",
+                        lambda *a, **kw: calls.append(a) or pd.DataFrame())
+    result = eia860m.update(log=lambda *_: None)
+    assert result.get("skipped") is True
+    assert calls == [], "update() should not have fetched anything on cooldown"
+
+
+def test_update_runs_after_the_cooldown_expires(tmp_store, monkeypatch):
+    import json
+    (tmp_store / ".state.json").write_text(json.dumps({
+        "last_success": (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=10)).isoformat(),
+        "latest": "2026-06", "count": 1, "snapshots": ["2026-06"],
+    }))
+    calls = []
+    monkeypatch.setattr(eia860m, "fetch_month",
+                        lambda y, m, **kw: (calls.append((y, m)) or
+                                            _synthetic_df(y, m)))
+    result = eia860m.update(months_back=2, log=lambda *_: None)
+    assert result.get("skipped") is not True
+    assert calls, "update() should have fetched at least one month past cooldown"
+
+
+def test_update_force_bypasses_the_cooldown(tmp_store, monkeypatch):
+    import json
+    (tmp_store / ".state.json").write_text(json.dumps({
+        "last_success": pd.Timestamp.now(tz="UTC").isoformat(),
+        "latest": "2026-06", "count": 1, "snapshots": ["2026-06"],
+    }))
+    calls = []
+    monkeypatch.setattr(eia860m, "fetch_month",
+                        lambda y, m, **kw: (calls.append((y, m)) or
+                                            _synthetic_df(y, m)))
+    eia860m.update(months_back=2, force=True, log=lambda *_: None)
+    assert calls, "force=True should bypass the cooldown"
+
+
+def _synthetic_df(year, month):
+    return pd.DataFrame([{
+        "plant_id": 100, "plant_name": "P", "state": "PA",
+        "energy_source": "NG", "fuel_group": "Gas",
+        "nameplate_mw": 500.0, "summer_mw": 480.0, "winter_mw": 490.0,
+        "n_generators": 1, "reference_year": year, "reference_month": month,
+    }])
+
+
 # ── Month enumeration ───────────────────────────────────────────────────────
 
 def test_months_back_produces_the_expected_count():

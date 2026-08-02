@@ -217,13 +217,31 @@ def _months_back(n: int) -> list[tuple[int, int]]:
     return out
 
 
-def update(months_back: int = 4, log=print) -> dict:
+REFRESH_INTERVAL_DAYS = 7    # EIA publishes each month once — no point re-hitting
+
+
+def update(months_back: int = 4, force: bool = False, log=print) -> dict:
     """Pull the last `months_back` monthly snapshots, keep whatever comes back.
 
     Idempotent: an existing snapshot is skipped unless it's the newest month
     (which we always refresh in case EIA revised it). Retention is not enforced
     here — old snapshots are useful for tracking additions over time.
+
+    Self-throttled to REFRESH_INTERVAL_DAYS: 860M lands ~once/month per
+    reference month, so hitting EIA every app open (or even daily) is pure
+    waste. Callers can pass ``force=True`` to override — e.g. the CLI.
     """
+    if not force:
+        since = days_since_update()
+        if since is not None and since < REFRESH_INTERVAL_DAYS:
+            log(f"EIA-860M: refreshed {since:.1f}d ago (< {REFRESH_INTERVAL_DAYS}d), skipping.")
+            got = available()
+            return {
+                "snapshots": [f"{y}-{m:02d}" for y, m in sorted(got)],
+                "latest": f"{got[-1][0]}-{got[-1][1]:02d}" if got else None,
+                "count": len(got),
+                "skipped": True,
+            }
     paths.EIA860M_DIR.mkdir(parents=True, exist_ok=True)
     want = _months_back(months_back)
     log(f"EIA-860M: refreshing {len(want)} months back to "
@@ -277,9 +295,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("cmd", choices=["update", "status"])
     p.add_argument("--months-back", type=int, default=4)
+    p.add_argument("--force", action="store_true",
+                   help="Bypass the once-a-week self-throttle.")
     args = p.parse_args()
     if args.cmd == "update":
-        update(months_back=args.months_back)
+        update(months_back=args.months_back, force=args.force)
     else:
         got = available()
         print(f"snapshots on disk: {len(got)}")
