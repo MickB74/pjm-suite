@@ -16,6 +16,10 @@ import streamlit as st
 from pjm_core import paths
 from datasets.eia923.eia923 import load as load_eia, update as update_eia, fuel_group
 from datasets.eia860 import eia860 as load_eia860
+from datasets.eia860m import eia860m as load_eia860m
+
+_MONTH_NAMES_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 SOURCE_COLORS = {
     "Gas": "#ff7f0e", "Coal": "#5d4037", "Nuclear": "#9467bd",
@@ -90,15 +94,47 @@ if sub.empty:
 # 2024 → 2026 does not make MW appear to shrink when 923 simply hasn't caught
 # up to summer peakers yet. The per-plant table still uses the 923-joined
 # `annual` (rows without 923 gen would just be blank rows, which isn't useful).
+# Source-selection preference:
+#   1. 860M snapshot on-or-before Dec-year_sel — closest in-time capacity read
+#      for the selected year. 860M lands ~1-2 months after each reference month,
+#      so the 2026 vintage is available now while annual 860 lags to mid-2027.
+#   2. Annual 860 for year_sel, if that year has been released.
+#   3. Newest of either — last-resort fallback for very old year_sel.
 _available_860 = load_eia860.available_years()
-_cap_year = year_sel if year_sel in _available_860 else (max(_available_860) if _available_860 else None)
-cap = load_eia860.load(_cap_year) if _cap_year else pd.DataFrame()
+_cap_label = _cap_year_val = None      # (str, sortable) — label + comparable value
+_cap_source = None                      # "860M" | "860"
+cap = pd.DataFrame()
+
+_ym = load_eia860m.latest_before(year_sel, 12)
+if _ym is not None:
+    cap = load_eia860m.load(_ym[0], _ym[1])
+    if not cap.empty:
+        cap = cap.rename(columns={"energy_source": "fuel_type"})
+        _cap_label = f"{_MONTH_NAMES_SHORT[_ym[1] - 1]} {_ym[0]}"
+        _cap_year_val = _ym
+        _cap_source = "860M"
+
+if cap.empty and _available_860:
+    _cap_yr = year_sel if year_sel in _available_860 else max(_available_860)
+    cap = load_eia860.load(_cap_yr)
+    if not cap.empty:
+        _cap_label = str(_cap_yr)
+        _cap_year_val = _cap_yr
+        _cap_source = "860 (annual)"
 if not cap.empty:
-    cap = (cap.rename(columns={"energy_source": "fuel_type"})
-           [["plant_id", "plant_name", "state", "fuel_type",
-             "nameplate_mw", "summer_mw", "winter_mw"]]
-           .groupby(["plant_id", "plant_name", "state", "fuel_type"],
-                    as_index=False).sum())
+    # `energy_source` already renamed to `fuel_type` above when the source is
+    # 860M; annual 860 still ships it as `energy_source`, so guard both cases.
+    if "energy_source" in cap.columns and "fuel_type" not in cap.columns:
+        cap = cap.rename(columns={"energy_source": "fuel_type"})
+    cap = cap[["plant_id", "plant_name", "state", "fuel_type",
+               "nameplate_mw", "summer_mw", "winter_mw"]].copy()
+    # 923 stores plant_id as *string* (object dtype). 860 / 860M return int
+    # or float. Merging across dtypes → ValueError, so coerce cap to match 923.
+    cap["plant_id"] = pd.to_numeric(cap["plant_id"], errors="coerce").astype("Int64")
+    cap = cap.dropna(subset=["plant_id"])
+    cap["plant_id"] = cap["plant_id"].astype(int).astype(str)
+    cap = (cap.groupby(["plant_id", "plant_name", "state", "fuel_type"],
+                       as_index=False).sum())
     cap["source"] = cap["fuel_type"].map(fuel_group)
     # Apply the same source / fuel / state / search filters that shape `sub`,
     # so the KPI shows the capacity that matches what the user asked to see.
@@ -152,20 +188,27 @@ total_mw = float(cap_filtered["nameplate_mw"].sum()) if len(cap_filtered) else 0
 
 _c1, _c2, _c3 = st.columns(3)
 _c1.metric("Total net generation (MWh)", f"{total_mwh:,.0f}")
-# When 860 lags year_sel, put the vintage in the METRIC LABEL rather than just
-# the tooltip — same MW showing across 2025 / 2026 (because both fall back to
-# 860's latest) is confusing without an inline "as of YYYY" cue.
+# When the vintage doesn't sit inside year_sel, put "as of Xxx YYYY" in the
+# label rather than only the tooltip — otherwise the same MW showing across
+# two years reads as broken. 860M shrinks that gap dramatically: for year_sel
+# = 2026 today we'll show "as of Jun 2026" from 860M rather than "as of 2024"
+# from the annual fallback.
+def _vintage_is_year_end(v_val, y_sel) -> bool:
+    """Only annual 860 for exactly year_sel counts as 'no vintage caveat
+    needed'. Everything else (an earlier annual, or ANY 860M snapshot —
+    even one within year_sel — is a point-in-time read) shows its label."""
+    return v_val is not None and (isinstance(v_val, int) and v_val == y_sel)
+
 _mw_label = "Nameplate capacity (MW)"
-if _cap_year and _cap_year != year_sel:
-    _mw_label += f" · as of {_cap_year}"
+if _cap_label and not _vintage_is_year_end(_cap_year_val, year_sel):
+    _mw_label += f" · as of {_cap_label}"
 _c2.metric(_mw_label, f"{total_mw:,.0f}" if total_mw else "—",
            help=(f"Total installed nameplate across the filter selection. "
-                 f"Source: EIA-860 {_cap_year}."
-                 + (f" EIA has not yet released 860 for {year_sel} — annual "
-                    f"860 lands ~6 months after year-end. Using {_cap_year} "
-                    "as the best available proxy; new plants online since "
-                    f"{_cap_year} and retirements after it are not reflected."
-                    if _cap_year and _cap_year != year_sel else ""))
+                 f"Source: EIA-{_cap_source}, {_cap_label}."
+                 + (f" No {year_sel} vintage published yet; using the closest "
+                    "available snapshot as a proxy."
+                    if _cap_label and not _vintage_is_year_end(_cap_year_val, year_sel)
+                    else ""))
            if total_mw else None)
 if total_mw and _hrs:
     _fleet_cf = total_mwh / (total_mw * _hrs)

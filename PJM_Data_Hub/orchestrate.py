@@ -82,6 +82,12 @@ def _update_eia860(years=None, **_) -> None:
     update(years=years, log=print)
 
 
+def _update_eia860m(**_) -> None:
+    from datasets.eia860m.eia860m import update
+    print("Updating EIA-860M (monthly generator inventory) …")
+    update(log=print)
+
+
 def _update_queue(**_) -> None:
     from datasets.queue.pjm_queue import update
     print("Updating interconnection queue (daily snapshot) …")
@@ -98,6 +104,7 @@ UPDATERS = {
     "weather": _update_weather,
     "eia923": _update_eia923,
     "eia860": _update_eia860,
+    "eia860m": _update_eia860m,
     "queue": _update_queue,
 }
 
@@ -110,6 +117,7 @@ _STATE_DATASETS = [
     ("ancillary", paths.ANCILLARY_STATE),
     ("weather", paths.WEATHER_STATE),
     ("queue", paths.QUEUE_STATE),
+    ("eia860m", paths.EIA860M_STATE),
 ]
 
 # Year-partitioned datasets: one parquet per year, no state file.

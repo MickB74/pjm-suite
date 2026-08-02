@@ -40,6 +40,7 @@ CADENCE_DAYS = {
     "system_gen": 365,      # year-partitioned; new file per year
     "eia923": 365,          # ditto
     "eia860": 365,          # ditto
+    "eia860m": 30,          # monthly generator inventory — publishes ~monthly
     "capacity": None,       # user-maintained; freshness is not time-based
     "futures": 1,           # scraped intraday
     "gas": 1,               # gas strip refreshes at launch
@@ -58,6 +59,7 @@ LABELS = {
     "system_gen": "System generation by fuel",
     "eia923": "EIA-923 (plant generation)",
     "eia860": "EIA-860 (plant capacity)",
+    "eia860m": "EIA-860M (monthly generator inventory)",
     "capacity": "RPM capacity clearing prices",
     "futures": "Hub forward curve",
     "gas": "Henry Hub gas strip",
@@ -74,6 +76,7 @@ _STATE_DATASETS = [
     ("weather", paths.WEATHER_STATE),
     ("queue", paths.QUEUE_STATE),
     ("gas", paths.GAS_STRIP_STATE),
+    ("eia860m", paths.EIA860M_STATE),
     ("futures", paths.FUTURES_STATE),
 ]
 
