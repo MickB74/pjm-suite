@@ -11,6 +11,7 @@ Usage:
     python orchestrate.py update weather                    # ERA5 at major load centers
     python orchestrate.py update eia923                     # EIA-923 for PJM plants
     python orchestrate.py update eia860                     # EIA-860 plant capacity
+    python orchestrate.py update gas_basis                  # delivered gas vs Henry Hub
     python orchestrate.py update all                        # every dataset (continue on error)
     python orchestrate.py status                            # show store state
 """
@@ -38,6 +39,12 @@ def _update_hub_prices(all_hubs: bool = True, **_) -> None:
     print(f"Updating hub prices ({'all hubs' if all_hubs else PRIMARY_HUB}) …")
     result = update(hubs=hubs)
     print(f"Done. {result['rows']:,} rows ({result['start']} → {result['end']})")
+
+
+def _update_gas_basis(**_) -> None:
+    from datasets.gas_basis.pjm_gas_basis import update
+    print("Updating gas basis (delivered-to-power vs Henry Hub) …")
+    update(log=print)
 
 
 def _update_zone_prices(**_) -> None:
@@ -106,6 +113,7 @@ UPDATERS = {
     "eia860": _update_eia860,
     "eia860m": _update_eia860m,
     "queue": _update_queue,
+    "gas_basis": _update_gas_basis,
 }
 
 
@@ -118,6 +126,7 @@ _STATE_DATASETS = [
     ("weather", paths.WEATHER_STATE),
     ("queue", paths.QUEUE_STATE),
     ("eia860m", paths.EIA860M_STATE),
+    ("gas_basis", paths.GAS_BASIS_STATE),
 ]
 
 # Year-partitioned datasets: one parquet per year, no state file.
@@ -212,7 +221,11 @@ def main():
                 print(f"  {name:<12} error: {s['error']}")
             elif "rows" in s:
                 rng = f"{s.get('start')} → {s.get('end')}" if s.get("start") else ""
-                print(f"  {name:<12} {s['rows']:>12,} rows  {rng:<45} {s.get('age', '')}")
+                # Not every state file carries a row count — eia860m tracks
+                # snapshots instead — so don't assume one is there to format.
+                n = s["rows"]
+                count = f"{n:>12,} rows" if n is not None else f"{'—':>12}      "
+                print(f"  {name:<12} {count}  {rng:<45} {s.get('age', '')}")
             elif "files" in s:
                 print(f"  {name:<12} {s['files']:>2} files  years {s.get('years'):<12} "
                       f"{'':<32} {s.get('age', '')}")

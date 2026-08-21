@@ -197,11 +197,25 @@ if "vol_source" in df.columns:
         "daily strip pulls have accumulated.")
     st.caption(f"📈 **Gas volatility:** {vol_source}. {_vol_note}")
 
+if "hr_source" in df.columns:
+    hr_source = df["hr_source"].iloc[0]
+    _hr_note = (
+        "One fit across every month of history: a trend, calendar-month "
+        "effects, and extreme-weather anomalies. Estimates the fleet's drift "
+        "off the whole record rather than ~6 observations per month, and "
+        "predicts forward along it."
+        if hr_source.startswith("pooled") else
+        "Each calendar month estimated from its own past observations, "
+        "recency-weighted. Used while history is too short to identify a "
+        "trend — it tracks the recent fleet but lags a drifting one.")
+    st.caption(f"🔥 **Heat-rate anchor:** {hr_source}. {_hr_note}")
+
 st.subheader("Forecast table")
 st.caption(
     "One row per forward month. Hover any column header for what it means and "
     "how it enters the forecast.")
-low_history = int((df["n_samples"] < 2).sum())
+_pooled = str(df.get("hr_source", pd.Series([""])).iloc[0]).startswith("pooled")
+low_history = 0 if _pooled else int((df["n_samples"] < 2).sum())
 if low_history:
     st.warning(
         f"⚠️ {low_history:,} of {len(df):,} months have fewer than 2 historical "
@@ -235,23 +249,25 @@ _column_help = {
                  "January contract carries roughly twice the delivery-month "
                  "risk of a July one. Measured off the vintage archive where "
                  "enough data exists, otherwise modelled from EIA spot.",
-    "hr_median": "Recency-weighted median implied heat rate (MMBtu/MWh) for "
-                 "this calendar month, from past LMP ÷ HH gas. 3-year "
-                 "half-life on the observation year, so the current fleet "
-                 "dominates the anchor.",
+    "hr_median": "Implied heat rate anchor (MMBtu/MWh) for this month, from "
+                 "past LMP ÷ HH gas. Normally the pooled fit — trend plus "
+                 "calendar-month effects plus weather — evaluated at this "
+                 "month; on short histories, the recency-weighted median of "
+                 "this calendar month alone. The banner above says which.",
     "p10": "10th percentile power price from the Monte Carlo ($/MWh).",
     "p25": "25th percentile power price from the Monte Carlo ($/MWh).",
     "p50": "Median power price from the Monte Carlo ($/MWh). Equals "
            "gas_fwd × heat rate at the anchor, adjusted for lognormal drift.",
     "p75": "75th percentile power price from the Monte Carlo ($/MWh).",
     "p90": "90th percentile power price from the Monte Carlo ($/MWh).",
-    "n_samples": "Raw count of past observations of this calendar month's "
-                 "implied heat rate in the data lake. Below 2 the month "
-                 "falls back to a default heat rate — treat as rough until "
-                 "more history accumulates.",
-    "n_eff": "Effective sample size after the 3-year recency weighting. "
-             "Tells you how much of the raw history is actually driving "
-             "the anchor once older years are downweighted.",
+    "n_samples": "Observations behind the heat-rate anchor. Under the pooled "
+                 "fit this is every month in the panel, the same for all "
+                 "rows; under the fallback it is only this calendar month's "
+                 "own history, and below 2 the month uses a default.",
+    "n_eff": "Effective sample size. Under the fallback this is the raw "
+             "history discounted by the recency weights; under the pooled "
+             "fit the whole panel informs every month, so it matches the "
+             "count on the left.",
 }
 _labels = {
     "month": "Month", "gas_fwd": "Gas fwd $/MMBtu", "gas_sigma": "Gas σ",
@@ -267,9 +283,13 @@ _column_config = {
 st.dataframe(disp, width="stretch", hide_index=True, column_config=_column_config)
 
 st.caption(
-    "**Methodology:** P50 power price = gas forward × recency-weighted median implied heat rate "
-    "(historical LMP ÷ HH gas, with older years downweighted on a 3-year half-life so the current "
-    "fleet drives the anchor). Monte Carlo: gas is drawn as a *correlated path* across the horizon "
+    "**Methodology:** P50 power price = gas forward × implied heat rate (historical LMP ÷ HH gas). "
+    "The heat-rate anchor comes from a single fit across every month of history — a trend, "
+    "calendar-month effects, and extreme-weather anomalies — so the fleet's drift is estimated off "
+    "the whole record and projected forward, rather than each month being read off its own handful "
+    "of past observations. Cold- and hot-day risk can't be known ahead, so it is carried as spread "
+    "rather than level, which is why winter months forecast wider than shoulder months. "
+    "Monte Carlo: gas is drawn as a *correlated path* across the horizon "
     "(Ornstein-Uhlenbeck, κ = 0.29/yr) rather than independently per month, so a regime shift moves "
     "the whole strip together. Gas volatility is seasonal in the delivery month and saturates with "
     "horizon instead of growing as √t. Power passes through 90% of a gas move, not 100% — the "

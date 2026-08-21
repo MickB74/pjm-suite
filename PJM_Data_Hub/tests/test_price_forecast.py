@@ -191,3 +191,244 @@ def test_run_is_reproducible_for_a_seed(monkeypatch):
     a = pf.run(horizon_months=6, n_sims=2_000, seed=11)
     b = pf.run(horizon_months=6, n_sims=2_000, seed=11)
     pd.testing.assert_frame_equal(a, b)
+
+
+# ── Pooled heat-rate model ──────────────────────────────────────────────────
+
+def _hr_panel(n_months=72, trend_per_yr=0.10, seasonal=True,
+              start="2020-01-01", noise=0.12, seed=0):
+    """A synthetic HR panel with a known log-linear trend and seasonal shape.
+
+    `noise` matters: a noiseless panel fits perfectly, so residual and
+    parameter variance both collapse to zero and σ pins to its floor.
+    """
+    month = pd.date_range(start, periods=n_months, freq="MS")
+    t = np.arange(n_months) / 12.0
+    seas = 0.3 * np.cos(2 * np.pi * (month.month - 1) / 12) if seasonal else 0.0
+    eps = np.random.default_rng(seed).normal(0, noise, n_months)
+    hr = np.exp(np.log(10.0) + trend_per_yr * t + seas + eps)
+    return pd.DataFrame({"month": month, "cal_month": month.month,
+                         "year": month.year, "heat_rate": hr})
+
+
+def _wx_panel(months, xcold, xhot):
+    return pd.DataFrame({"month": months, "xcold": xcold, "xhot": xhot})
+
+
+def test_fit_returns_none_below_the_minimum_history():
+    """A trend trained on two years is worse than no trend — refuse to fit."""
+    short = _hr_panel(n_months=pf.HR_MODEL_MIN_MONTHS - 1)
+    assert pf._fit_heat_rate_model(short, pd.DataFrame()) is None
+
+
+def test_fitted_model_recovers_a_known_trend():
+    panel = _hr_panel(trend_per_yr=0.10)
+    m = pf._fit_heat_rate_model(panel, pd.DataFrame())
+    assert m is not None
+    assert m.beta[1] == pytest.approx(0.10, abs=0.02)
+
+
+def test_prediction_extrapolates_the_trend_rather_than_lagging_it():
+    """The whole point of pooling: predict forward along the drift, where the
+    per-calendar-month median sits back inside the window."""
+    panel = _hr_panel(trend_per_yr=0.10)
+    m = pf._fit_heat_rate_model(panel, pd.DataFrame())
+    nxt = panel["month"].max() + pd.offsets.MonthBegin(1)
+    anchor, _ = m.predict([nxt])
+    same_cal = panel[panel["cal_month"] == nxt.month]["heat_rate"]
+    assert anchor[0] > same_cal.max()
+
+
+def test_trend_is_held_flat_past_the_extrapolation_horizon():
+    """A linear fit run out indefinitely is how the anchor runs away."""
+    panel = _hr_panel(trend_per_yr=0.10)
+    m = pf._fit_heat_rate_model(panel, pd.DataFrame())
+    last = panel["month"].max()
+    far = last + pd.DateOffset(years=int(pf.HR_TREND_MAX_YEARS) + 5)
+    capped = last + pd.DateOffset(years=int(pf.HR_TREND_MAX_YEARS) + 1)
+    # Same calendar month either side, so only the trend term can differ.
+    a_far, _ = m.predict([far])
+    a_cap, _ = m.predict([pd.Timestamp(capped.year, far.month, 1)])
+    assert a_far[0] == pytest.approx(a_cap[0], rel=1e-6)
+
+
+def test_sigma_grows_with_unknown_weather_risk_in_that_month():
+    """Weather is unknowable ahead, so months whose weather varies a lot must
+    forecast wider — this is what makes the winter band wider than September's."""
+    panel = _hr_panel()
+    months = panel["month"]
+    rng = np.random.default_rng(0)
+    # January swings wildly in cold-day degrees; every other month is placid.
+    xcold = np.where(months.dt.month == 1, rng.normal(300, 150, len(months)), 0.0)
+    m = pf._fit_heat_rate_model(panel, _wx_panel(months, xcold, 0.0))
+    assert m is not None
+    jan = pd.Timestamp("2027-01-01")
+    sep = pd.Timestamp("2026-09-01")
+    _, sig = m.predict([jan, sep])
+    assert sig[0] > sig[1]
+
+
+def test_sigma_widens_as_the_trend_is_extrapolated_further():
+    """Parameter uncertainty: the fitted line is least certain furthest out."""
+    panel = _hr_panel()
+    m = pf._fit_heat_rate_model(panel, pd.DataFrame())
+    near = panel["month"].max() + pd.offsets.MonthBegin(1)
+    far = near + pd.DateOffset(years=1)
+    _, sig = m.predict([near, pd.Timestamp(far.year, near.month, 1)])
+    assert sig[1] > sig[0]
+
+
+def test_run_reports_which_heat_rate_estimator_it_used(monkeypatch):
+    _fake_inputs(monkeypatch, n_hist_years=8)
+    monkeypatch.setattr(pf, "_load_weather_monthly", lambda *a, **k: pd.DataFrame())
+    out = pf.run(horizon_months=6, n_sims=200, seed=1)
+    assert "pooled" in out["hr_source"].iloc[0]
+
+
+def test_run_falls_back_to_the_recency_median_on_short_history(monkeypatch):
+    _fake_inputs(monkeypatch, n_hist_years=2)
+    monkeypatch.setattr(pf, "_load_weather_monthly", lambda *a, **k: pd.DataFrame())
+    out = pf.run(horizon_months=6, n_sims=200, seed=1)
+    assert "recency median" in out["hr_source"].iloc[0]
+
+
+# ── Gas-curve gap filling ───────────────────────────────────────────────────
+
+def _seasonal_strip(start="2026-08-01", n=30, base=3.8):
+    """A forward curve with a realistic winter peak / spring trough."""
+    month = pd.date_range(start, periods=n, freq="MS")
+    mult = {1: 1.26, 2: 1.15, 3: 0.94, 4: 0.89, 5: 0.90, 6: 0.94,
+            7: 1.01, 8: 1.03, 9: 0.89, 10: 0.90, 11: 0.95, 12: 1.13}
+    return pd.Series([base * mult[m.month] for m in month], index=month)
+
+
+def test_price_shape_recovers_the_curves_own_seasonality():
+    shape = pf._price_seasonal_shape(_seasonal_strip())
+    assert shape[1] > shape[4]                      # January over April
+    assert np.mean(list(shape.values())) == pytest.approx(1.0, abs=0.01)
+
+
+def test_price_shape_is_empty_on_a_curve_too_short_to_have_one():
+    short = _seasonal_strip(n=6)
+    assert pf._price_seasonal_shape(short) == {}
+
+
+def test_backward_gap_is_not_filled_with_the_far_end_of_the_curve():
+    """The old clamp turned 'months before the curve' into 'zero months past
+    the end', filling a 2025 slot with the most deferred contract, flat."""
+    strip = _seasonal_strip(start="2026-08-01")
+    out = pf._extend_to_horizon(strip, 12, pd.Timestamp("2025-08-01"))
+    filled = out.loc[:pd.Timestamp("2026-07-01")]
+    assert filled.nunique() > 1                      # not flat
+    assert filled.max() < strip.max() * 1.5
+    # and it carries the seasonal shape, not one repeated number
+    assert filled.loc[pd.Timestamp("2026-01-01")] > filled.loc[pd.Timestamp("2026-04-01")]
+
+
+def test_backward_gap_anchors_on_realised_spot_when_given():
+    """Recent spot is far closer to the missing near months than the first
+    surviving contract, which can be a year away."""
+    strip = _seasonal_strip(start="2026-08-01", base=3.8)
+    spot = (pd.Timestamp("2025-07-01"), 2.00)
+    out = pf._extend_to_horizon(strip, 12, pd.Timestamp("2025-08-01"), spot=spot)
+    assert out.loc[pd.Timestamp("2025-08-01")] < 2.6   # pulled toward spot
+    no_spot = pf._extend_to_horizon(strip, 12, pd.Timestamp("2025-08-01"))
+    assert out.loc[pd.Timestamp("2025-08-01")] < no_spot.loc[pd.Timestamp("2025-08-01")]
+
+
+def test_forward_gap_still_mean_reverts_toward_the_long_run_anchor():
+    strip = _seasonal_strip(start="2026-08-01", n=13, base=3.0)
+    out = pf._extend_to_horizon(strip, 48, pd.Timestamp("2026-08-01"))
+    far = out.loc[out.index > strip.index.max()]
+    assert abs(far.iloc[-1] - pf.LONG_RUN_GAS) < abs(far.iloc[0] - pf.LONG_RUN_GAS)
+
+
+def test_months_the_strip_covers_are_passed_through_untouched():
+    """The fill must never overwrite a real market print."""
+    strip = _seasonal_strip(start="2026-09-01")
+    out = pf._extend_to_horizon(strip, 12, pd.Timestamp("2026-08-20"),
+                                spot=(pd.Timestamp("2026-07-01"), 2.0))
+    for m in pd.date_range("2026-09-01", periods=12, freq="MS"):
+        assert out.loc[m] == pytest.approx(float(strip.loc[m]))
+
+
+# ── Regional gas basis ──────────────────────────────────────────────────────
+
+def _basis_series(years=8, jan=2.5, jul=0.0, noise=0.3, seed=0,
+                  end="2026-06-01"):
+    """Monthly basis with a winter hump, like the real Virginia series."""
+    month = pd.date_range(end=end, periods=years * 12, freq="MS")
+    seasonal = np.where(np.isin(month.month, [12, 1, 2]), jan, jul)
+    eps = np.random.default_rng(seed).normal(0, noise, len(month))
+    return pd.Series(seasonal + eps, index=month)
+
+
+def test_basis_stats_finds_the_winter_hump():
+    mu, sd = pf._basis_stats(_basis_series(), pd.Timestamp("2026-07-01"))
+    assert mu[1] > mu[7]
+    assert mu[1] == pytest.approx(2.5, abs=0.3)
+
+
+def test_basis_stats_ignores_history_beyond_the_window():
+    """Marcellus reset this market — a 2005 basis should not price 2026."""
+    old = pd.Series(6.0, index=pd.date_range("2004-01-01", periods=60, freq="MS"))
+    recent = _basis_series()
+    mu, _ = pf._basis_stats(pd.concat([old, recent]).sort_index(),
+                            pd.Timestamp("2026-07-01"))
+    assert max(mu.values()) < 4.0
+
+
+def test_basis_stats_empty_without_enough_history():
+    thin = _basis_series(years=1)
+    assert pf._basis_stats(thin, pd.Timestamp("2026-07-01")) == ({}, {})
+
+
+def test_basis_sigma_is_shrunk_toward_the_pooled_spread():
+    """Per-month σ off ~8 points swings wildly; shrinkage keeps the band from
+    lurching between adjacent months for no defensible reason."""
+    s = _basis_series(noise=0.3)
+    # Give one month a wild outlier and check σ does not chase it fully.
+    s.loc[s.index[s.index.month == 3][0]] += 6.0
+    _, sd = pf._basis_stats(s, pd.Timestamp("2026-07-01"))
+    raw = s[s.index.month == 3].std()
+    assert sd[3] < raw
+
+
+def test_delivered_gas_fills_the_publication_lag_with_the_seasonal_normal():
+    """EIA runs ~3 months late; the recent months the trend leans on must not
+    simply drop out of the panel."""
+    gas = pd.Series(3.0, index=pd.date_range("2025-01-01", periods=18, freq="MS"))
+    basis = pd.Series(1.0, index=pd.date_range("2025-01-01", periods=12, freq="MS"))
+    out = pf._delivered_gas(gas, basis, {m: 1.0 for m in range(1, 13)})
+    assert out.notna().all()
+    assert out.iloc[-1] == pytest.approx(4.0)
+
+
+def test_delivered_gas_is_a_passthrough_without_basis_data():
+    gas = pd.Series(3.0, index=pd.date_range("2025-01-01", periods=12, freq="MS"))
+    out = pf._delivered_gas(gas, pd.Series(dtype=float), {})
+    pd.testing.assert_series_equal(out, gas)
+
+
+def test_basis_is_off_by_default_and_leaves_the_forecast_unchanged(monkeypatch):
+    """The channel is opt-in; the default path must not consult it at all."""
+    _fake_inputs(monkeypatch, n_hist_years=8)
+    monkeypatch.setattr(pf, "_load_weather_monthly", lambda *a, **k: pd.DataFrame())
+    called = []
+    monkeypatch.setattr(pf, "_load_gas_basis",
+                        lambda *a, **k: called.append(1) or pd.Series(dtype=float))
+    out = pf.run(horizon_months=6, n_sims=200, seed=1)
+    assert not called
+    assert out["basis_fwd"].eq(0).all()
+
+
+def test_basis_widens_the_winter_band_when_enabled(monkeypatch):
+    _fake_inputs(monkeypatch, n_hist_years=8)
+    monkeypatch.setattr(pf, "_load_weather_monthly", lambda *a, **k: pd.DataFrame())
+    monkeypatch.setattr(pf, "_load_gas_basis", lambda *a, **k: _basis_series())
+    out = pf.run(asof=pd.Timestamp("2026-07-01"), horizon_months=12,
+                 n_sims=4000, seed=1, use_basis=True)
+    jan = out[out["cal_month"] == 1].iloc[0]
+    jul = out[out["cal_month"] == 7].iloc[0]
+    assert jan["basis_fwd"] > jul["basis_fwd"]
+    assert jan["basis_sigma"] > 0
