@@ -84,6 +84,64 @@ def _complete_months(hub: str = PRIMARY_HUB) -> set[pd.Timestamp]:
     }
 
 
+# Publication lags. These histories do not all become knowable the instant a
+# month ends, and the backtest is only honest if it waits as long as a real
+# forecaster would have to.
+#
+#   LMP / weather — PJM Data Miner posts RT LMP next-day and temperatures are
+#     observed daily, so month M's average is computable on day 1 of M+1.
+#   Henry Hub spot — EIA's monthly rollup of RNGWHHD lands in the first week
+#     of M+1. Approximated by a publish *day*, not a whole-month lag: a
+#     forecaster standing on the 2nd genuinely does not have last month's
+#     average, but one standing on the 15th does, and a month-granular lag
+#     cannot express that.
+#   Gas basis — N3045<ST>3 carries the ~3-month lag documented in CLAUDE.md.
+#     Only reachable when USE_DELIVERED_GAS is on or via --hr-only.
+GAS_PUBLISH_DAY = 7
+BASIS_LAG_MONTHS = 3
+
+
+def _seen_before(asof: pd.Timestamp,
+                 lag_months: int = 0,
+                 publish_day: int = 1) -> pd.Timestamp:
+    """First month a forecaster standing on `asof` may *not* look at.
+
+    Every history the backtest feeds the model is a **monthly average**, which
+    cannot exist until the month has finished — and for some series, not until
+    the agency publishes it some days or months later.
+
+    Two separate cuts, both of which were missing:
+
+    1. The month boundary. A plain `month < asof` admits the as-of's own month
+       for any as-of stamped after the 1st. On as-of 2026-01-02 that leaked
+       January's realised $7.72 Henry Hub — published in February — and
+       `run()` passes the last spot print down to `_extend_to_horizon` as the
+       `spot` anchor for every backward-gap month. The spike propagated across
+       the whole fill (REVERSION_MONTHS = 24 decays a shock only ~19% over
+       five months), and that vintage forecast Mar-2026 at a P50 of $76
+       against a $30 actual — the worst row in the backtest. Cutting at the
+       month boundary took its gas-fill MAE from 2.30 to 0.50.
+
+    2. The publication lag. Even a completed month is not knowable until it is
+       released. `_monthly_asofs` picks the earliest vintage in each calendar
+       month, so as-ofs cluster on the 1st–3rd: 11 of 12 fall before
+       GAS_PUBLISH_DAY, and every one of them was being handed a Henry Hub
+       average that would not exist for another few days.
+
+    `publish_day` expresses a within-month release date (the just-ended month
+    is withheld until then); `lag_months` expresses a multi-month one. They
+    compose, though no caller currently needs both.
+    """
+    asof = pd.Timestamp(asof)
+    first_unknown = asof.to_period("M").to_timestamp()
+    if asof.day < publish_day:
+        # The month that just ended has not been released yet either.
+        first_unknown -= pd.offsets.MonthBegin(1)
+    if lag_months:
+        first_unknown -= pd.offsets.MonthBegin(lag_months)
+    return first_unknown
+
+
 def run_backtest(
     hub: str = PRIMARY_HUB,
     horizon_months: int = 12,
@@ -94,7 +152,9 @@ def run_backtest(
 ) -> pd.DataFrame:
     """Run the walk-forward and return one row per (as-of, forecast-month).
 
-    Filters the model's own inputs to `< asof` before each run — no lookahead.
+    Filters the model's own inputs to months that *finished* before `asof` —
+    these are all monthly averages, so the as-of's own month cannot be known
+    yet, and admitting it leaks a full month of the future into the anchor.
     Returned columns:
         asof, month, horizon (months), gas_fwd, hr_median,
         p10, p50, p90, actual, err (p50 - actual), ape, in_band,
@@ -135,18 +195,22 @@ def run_backtest(
 
     rows: list[pd.DataFrame] = []
     for asof in asofs:
-        lmp_seen = lmp_full[lmp_full["month"] < asof]
-        gas_seen = gas_hist_full[gas_hist_full.index < asof]
+        # Each series gets its own cut — see _seen_before.
+        seen_before = _seen_before(asof)
+        gas_before = _seen_before(asof, publish_day=GAS_PUBLISH_DAY)
+        basis_before = _seen_before(asof, lag_months=BASIS_LAG_MONTHS)
+        lmp_seen = lmp_full[lmp_full["month"] < seen_before]
+        gas_seen = gas_hist_full[gas_hist_full.index < gas_before]
         # Skip as-ofs with too little LMP history — the heat-rate anchor needs
         # a few years to be meaningful, and pretending otherwise would spoil
         # the summary with garbage bias numbers.
         if lmp_seen["month"].nunique() < 12:
             log(f"  {asof.date()}: only {lmp_seen['month'].nunique()}mo of LMP, skipping")
             continue
-        wx_seen = (wx_full[wx_full["month"] < asof] if not wx_full.empty
+        wx_seen = (wx_full[wx_full["month"] < seen_before] if not wx_full.empty
                    else wx_full)
-        basis_seen = (basis_full[basis_full.index < asof] if not basis_full.empty
-                      else basis_full)
+        basis_seen = (basis_full[basis_full.index < basis_before]
+                      if not basis_full.empty else basis_full)
         with mock.patch.object(pf, "_load_dom_hub_monthly", lambda hub=None: lmp_seen), \
              mock.patch.object(pf, "_gas_from_eia", lambda *a, **k: gas_seen), \
              mock.patch.object(pf, "_load_weather_monthly", lambda *a, **k: wx_seen), \
@@ -230,17 +294,20 @@ def run_hr_backtest(hub: str = PRIMARY_HUB, horizon_months: int = 12,
 
     rows = []
     for asof in _monthly_asofs(gas_strip.vintages()):
-        seen = hr_all[hr_all["month"] < asof]
+        seen_before = _seen_before(asof)
+        gas_before = _seen_before(asof, publish_day=GAS_PUBLISH_DAY)
+        basis_before = _seen_before(asof, lag_months=BASIS_LAG_MONTHS)
+        seen = hr_all[hr_all["month"] < seen_before]
         if len(seen) < pf.HR_MODEL_MIN_MONTHS:
             continue
-        wx_seen = wx[wx["month"] < asof] if not wx.empty else wx
+        wx_seen = wx[wx["month"] < seen_before] if not wx.empty else wx
         model = pf._fit_heat_rate_model(seen, wx_seen)
         # Delivered-gas variant: the heat rate the live model actually fits.
-        b_seen = basis[basis.index < asof] if not basis.empty else basis
+        b_seen = basis[basis.index < basis_before] if not basis.empty else basis
         b_mu, _ = pf._basis_stats(b_seen, asof)
-        deliv_hist = pf._delivered_gas(gas[gas.index < asof], b_seen, b_mu)
+        deliv_hist = pf._delivered_gas(gas[gas.index < gas_before], b_seen, b_mu)
         seen_d = pf._build_heat_rate_distribution(
-            lmp[lmp["month"] < asof], deliv_hist)
+            lmp[lmp["month"] < seen_before], deliv_hist)
         model_d = pf._fit_heat_rate_model(seen_d, wx_seen)
         ref_year = int(seen["year"].max())
         for h in range(1, horizon_months + 1):
@@ -295,7 +362,8 @@ def run_gas_backtest(horizon_months: int = 12,
             continue
         strip = got[0].set_index("month")["gas_price"]
         strip.index = pd.to_datetime(strip.index)
-        seen = spot_hist[spot_hist.index < asof]
+        seen = spot_hist[spot_hist.index < _seen_before(
+            asof, publish_day=GAS_PUBLISH_DAY)]
         if seen.empty:
             continue
         start = asof + pd.offsets.MonthBegin(1)

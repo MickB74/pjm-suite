@@ -166,3 +166,76 @@ def test_complete_months_without_a_store_is_empty_not_a_crash(
         tmp_path, monkeypatch):
     monkeypatch.setattr(fb.paths, "HUB_PRICES_PARQUET", tmp_path / "nope.parquet")
     assert fb._complete_months() == set()
+
+
+# ── _seen_before() ───────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("asof, expected", [
+    ("2026-01-01", "2026-01-01"),   # as-of on the 1st: month still not knowable
+    ("2026-01-02", "2026-01-01"),   # the row that leaked $7.72 Jan gas
+    ("2026-01-31", "2026-01-01"),   # even the last day: the average isn't in yet
+    ("2026-08-20", "2026-08-01"),
+])
+def test_seen_before_cuts_at_the_month_boundary_not_the_asof_date(asof, expected):
+    assert fb._seen_before(pd.Timestamp(asof)) == pd.Timestamp(expected)
+
+
+def test_seen_before_hides_the_asofs_own_month_from_a_monthly_series():
+    # These histories are monthly *averages*: a forecaster standing inside
+    # January cannot know January's. Truncating on the raw as-of date would
+    # let it through and leak a month of the future into the gas anchor.
+    hist = pd.Series(
+        [4.26, 7.72],
+        index=[pd.Timestamp("2025-12-01"), pd.Timestamp("2026-01-01")],
+    )
+    seen = hist[hist.index < fb._seen_before(pd.Timestamp("2026-01-02"))]
+    assert list(seen.index) == [pd.Timestamp("2025-12-01")]
+    assert float(seen.iloc[-1]) == 4.26
+
+
+@pytest.mark.parametrize("asof, expected", [
+    # Before the release day, December's average does not exist yet either.
+    ("2026-01-02", "2025-12-01"),
+    ("2026-01-06", "2025-12-01"),
+    # On and after it, December is public and January is still the first
+    # month nobody can see.
+    ("2026-01-07", "2026-01-01"),
+    ("2026-01-20", "2026-01-01"),
+])
+def test_seen_before_withholds_last_month_until_the_publish_day(asof, expected):
+    got = fb._seen_before(pd.Timestamp(asof), publish_day=fb.GAS_PUBLISH_DAY)
+    assert got == pd.Timestamp(expected)
+
+
+def test_gas_publish_day_bites_on_the_asofs_the_backtest_actually_uses():
+    # _monthly_asofs takes the earliest vintage per calendar month, so as-ofs
+    # land on the 1st-3rd. If the publish day did not move those, this lag
+    # would be decorative.
+    asofs = [pd.Timestamp(d) for d in
+             ("2025-09-02", "2025-10-01", "2025-12-01", "2026-01-02")]
+    for a in asofs:
+        plain = fb._seen_before(a)
+        lagged = fb._seen_before(a, publish_day=fb.GAS_PUBLISH_DAY)
+        assert lagged < plain, f"{a.date()} should lose a month of gas history"
+
+
+def test_seen_before_applies_a_multi_month_lag_for_basis():
+    # N3045<ST>3 runs ~3 months behind, so a June as-of can see February.
+    got = fb._seen_before(pd.Timestamp("2026-06-15"),
+                          lag_months=fb.BASIS_LAG_MONTHS)
+    assert got == pd.Timestamp("2026-03-01")
+
+
+def test_seen_before_composes_publish_day_and_month_lag():
+    # Before the publish day the just-ended month drops out first, then the
+    # multi-month lag applies on top of that.
+    got = fb._seen_before(pd.Timestamp("2026-06-02"), lag_months=3,
+                          publish_day=7)
+    assert got == pd.Timestamp("2026-02-01")
+
+
+def test_seen_before_is_monotone_in_asof():
+    # A later as-of must never see *less* than an earlier one.
+    days = pd.date_range("2026-01-01", "2026-03-31", freq="D")
+    cuts = [fb._seen_before(d, publish_day=fb.GAS_PUBLISH_DAY) for d in days]
+    assert all(b >= a for a, b in zip(cuts, cuts[1:]))
