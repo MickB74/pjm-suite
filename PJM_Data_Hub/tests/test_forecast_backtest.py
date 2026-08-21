@@ -122,3 +122,47 @@ def test_monthly_asofs_takes_the_earliest_per_calendar_month():
 
 def test_monthly_asofs_empty_history_gives_empty_list():
     assert fb._monthly_asofs([]) == []
+
+
+# ── _complete_months() ───────────────────────────────────────────────────────
+
+def _hub_parquet(tmp_path, monkeypatch, spans):
+    """Write a hub-price parquet holding `spans` = {month: n_hours} and point
+    paths.HUB_PRICES_PARQUET at it."""
+    rows = []
+    for month, n_hours in spans.items():
+        start = pd.Timestamp(month)
+        rows.append(pd.DataFrame({
+            "datetime_beginning_ept": pd.date_range(start, periods=n_hours,
+                                                    freq="h"),
+            "pnode_name": fb.PRIMARY_HUB,
+            "total_lmp": 30.0,
+        }))
+    p = tmp_path / "hub.parquet"
+    pd.concat(rows, ignore_index=True).to_parquet(p, index=False)
+    monkeypatch.setattr(fb.paths, "HUB_PRICES_PARQUET", p)
+    return p
+
+
+def test_complete_months_keeps_full_months_and_drops_the_partial_one(
+        tmp_path, monkeypatch):
+    # July closed at 744/744; August is only 20 days in, as it would be
+    # mid-month — that is the row the backtest must not score.
+    _hub_parquet(tmp_path, monkeypatch,
+                 {"2026-07-01": 744, "2026-08-01": 20 * 24})
+    got = fb._complete_months()
+    assert pd.Timestamp("2026-07-01") in got
+    assert pd.Timestamp("2026-08-01") not in got
+
+
+def test_complete_months_accepts_the_dst_short_march(tmp_path, monkeypatch):
+    # Spring-forward means March legitimately holds 743 hours, not 744; a
+    # threshold that rejected it would silently drop a March every year.
+    _hub_parquet(tmp_path, monkeypatch, {"2026-03-01": 743})
+    assert pd.Timestamp("2026-03-01") in fb._complete_months()
+
+
+def test_complete_months_without_a_store_is_empty_not_a_crash(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(fb.paths, "HUB_PRICES_PARQUET", tmp_path / "nope.parquet")
+    assert fb._complete_months() == set()

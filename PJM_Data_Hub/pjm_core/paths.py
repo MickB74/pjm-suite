@@ -107,6 +107,12 @@ GAS_STRIP_STATE = GAS_DIR / ".last_update.json"
 # gas_price) so forecasts can be re-run against the strip as of a past date.
 GAS_STRIP_HISTORY_PARQUET = GAS_DIR / "henry_hub_strip_history.parquet"
 
+# Delivered-to-power gas price by state vs Henry Hub (see datasets/gas_basis).
+# DOM Hub burns Mid-Atlantic gas, not Henry Hub gas, and in winter the two
+# diverge by several dollars — which otherwise lands in the implied heat rate.
+GAS_BASIS_PARQUET = GAS_DIR / "gas_basis_monthly.parquet"
+GAS_BASIS_STATE = GAS_DIR / ".gas_basis_last_update.json"
+
 # PJM Western Hub forward curve (exchange-traded power futures). No free API:
 # user-maintained reference CSV seeded in futures.py, with a best-effort CME
 # settlements scraper that refreshes it and falls back to the CSV on failure.
