@@ -231,14 +231,26 @@ if not chart_df.empty:
     fig.update_layout(height=400, margin=dict(t=20))
     st.plotly_chart(fig, width="stretch")
 
-# Monthly heatmap for DOM HUB
+# Hour-of-day profile for DOM HUB
 if PRIMARY_HUB in sel_hubs:
-    st.subheader(f"Monthly average — {PRIMARY_HUB}")
+    st.subheader(f"Average by hour of day — {PRIMARY_HUB}")
     dom = sub[sub["pnode_name"] == PRIMARY_HUB].copy()
     dom["month"] = dom["datetime_beginning_ept"].dt.to_period("M").astype(str)
     dom["hour"] = dom["datetime_beginning_ept"].dt.hour
+    profile = dom.groupby("hour")[component].mean().reset_index()
+    if not profile.empty:
+        fig_bar = px.bar(profile, x="hour", y=component,
+                         labels={"hour": "Hour (EPT)", component: f"{component} ($/MWh)"},
+                         color_discrete_sequence=[HUB_COLORS.get(PRIMARY_HUB, "#1f77b4")])
+        fig_bar.update_xaxes(type="category")
+        fig_bar.update_layout(height=350, margin=dict(t=20))
+        st.plotly_chart(fig_bar, width="stretch")
+        st.caption(f"Mean **{component}** for each hour over {start} → {end} ({market}).")
+
+    # Month x hour heatmap only earns its place once there is more than one month.
     pivot = dom.groupby(["month", "hour"])[component].mean().unstack("hour")
-    if not pivot.empty:
+    if len(pivot) > 1:
+        st.subheader(f"Monthly average by hour — {PRIMARY_HUB}")
         fig2 = px.imshow(pivot, labels={"x": "Hour (EPT)", "y": "Month", "color": "$/MWh"},
                          aspect="auto", color_continuous_scale="RdYlGn_r")
         # Month labels like "2026-06" parse as dates and garble the axis.
